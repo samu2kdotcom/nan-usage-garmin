@@ -1,0 +1,5 @@
+<settings>
+    <setting propertyKey="@Properties.api_key" title="@Strings.ApiKeyTitle" prompt="@Strings.ApiKeyPrompt">
+        <settingConfig type="alphaNumeric" maxLength="64" required="true" errorMessage="@Strings.ApiKeyPrompt"/>
+    </setting>
+</settings>

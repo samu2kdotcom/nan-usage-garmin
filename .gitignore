@@ -1,0 +1,21 @@
+# Claves y certificados — NUNCA versionar
+devkey*.pem
+devkey*.der
+devkey*.p12
+developer_key.*
+devcert.*
+*.pem
+*.der
+
+# Artefactos de compilación (incluye el .prg con la key horneada)
+bin/
+exports/
+*.prg
+*.iq
+*.debug.xml
+*-settings.json
+
+# Varios
+*.bak
+.DS_Store
+__pycache__/

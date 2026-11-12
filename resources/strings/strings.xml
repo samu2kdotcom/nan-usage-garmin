@@ -1,0 +1,5 @@
+<strings>
+    <string id="AppName">NaN Usage</string>
+    <string id="ApiKeyTitle">NaN API Key</string>
+    <string id="ApiKeyPrompt">Your sk-… API key (Settings → API keys at cloud.nan.builders)</string>
+</strings>

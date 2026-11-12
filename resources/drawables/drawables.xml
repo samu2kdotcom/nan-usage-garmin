@@ -1,0 +1,5 @@
+<drawables>
+    <bitmap id="LauncherIcon" filename="launcher_icon.png"/>
+    <bitmap id="Wordmark" filename="wordmark.png"/>
+    <bitmap id="IsotipoMini" filename="isotipo_mini.png"/>
+</drawables>

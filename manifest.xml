@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<iq:manifest xmlns:iq="http://www.garmin.com/xml/connectiq" version="3">
+    <iq:application
+        entry="NaNUsageApp"
+        id="8f3a2b7c1d4e5f60a1b2c3d4e5f6a7b8"
+        name="@Strings.AppName"
+        minSdkVersion="5.0.0"
+        minApiLevel="4.2.0"
+        type="widget"
+        launcherIcon="@Drawables.LauncherIcon">
+        <iq:products>
+            <iq:product id="fr955"/>
+        </iq:products>
+        <iq:permissions>
+            <iq:uses-permission id="Communications"/>
+        </iq:permissions>
+        <iq:languages>
+            <iq:language>eng</iq:language>
+        </iq:languages>
+        <iq:barrels/>
+    </iq:application>
+</iq:manifest>
