@@ -16,6 +16,7 @@ Widget Garmin que muestra el consumo de **créditos de tu cuenta de NaN Cloud** 
 1. Descarga el `.prg` de tu reloj desde la última [**release**](https://github.com/samu2kdotcom/nan-usage-garmin/releases)
 2. Cierra Garmin Express, conecta el reloj por USB y copia el archivo a **`GARMIN/APPS/`** renombrado a `NaNUsage.prg` (Windows/MTP nativo; macOS con [OpenMTP](https://openmtp.ganeshrvel.com/))
 3. Expulsa el reloj → "Verificando Connect IQ…" → instalada (aparece en Apps y en el glance loop)
+4. Abre la app y pulsa **SELECT** (primera vez): te pide tu API key con el teclado del reloj. Se guarda en el reloj; para cambiarla después, **MENU** (ver abajo).
 
 | Archivo | Reloj |
 | --- | --- |
@@ -33,9 +34,17 @@ Widget Garmin que muestra el consumo de **créditos de tu cuenta de NaN Cloud** 
 
 ## Tu API key
 
-La app lee `https://api.nan.builders/v1/usage` con tu API key (`sk-…`, se crea en el dashboard de NaN). Una app instalada por USB **no tiene editor de ajustes** en Garmin, así que la key va horneada en el binario. Dos opciones:
+La app lee `https://api.nan.builders/v1/usage` con tu API key (`sk-…`, se crea en el dashboard de NaN → Ajustes → API keys). Una app instalada por USB **no tiene el editor de ajustes de Garmin** — es una limitación de Garmin: los ajustes solo existen para apps publicadas en la Connect IQ Store. Por eso la key se introduce **en el propio reloj**:
 
-- **Pedirnos un build personal** con tu key lista para instalar (menciona tu modelo de reloj), o
+- Abre la app y pulsa **SELECT** → se abre el teclado del reloj con `sk-` ya precargado → teclea el resto de tu key y confirma. Se guarda en el reloj y se usa al momento.
+- Para cambiarla más adelante: pulsa **MENU**.
+- La key no sale del reloj: solo viaja a `api.nan.builders` en la cabecera `Authorization` de la petición HTTPS.
+
+En modelos con pantalla táctil (fr965, fr265, fr970, fēnix 7) el teclado es en pantalla; en los de solo botones (fr955, fr255) se navega con los botones — un par de minutos, una sola vez.
+
+Alternativas (opcionales):
+
+- **Build personal** con la key ya horneada en el binario — pídelo en un issue indicando tu modelo de reloj.
 - **Compilártelo tú** en 2 min: escribe tu key en `resources/properties/properties.xml` y compila (ver abajo). ⚠️ Ese `.prg` lleva la key en claro: no lo compartas ni lo subas a ningún sitio.
 
 ## Compilar desde fuente

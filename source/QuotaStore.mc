@@ -530,21 +530,46 @@ class QuotaStore {
         return Application.Storage.getValue(QuotaStore.LAST_ERR_KEY);
     }
 
+    //! true si hay una API key utilizable en Properties: no nula y con el
+    //! MISMO umbral de longitud que refresh() (>= 8). La comparten el hint
+    //! del estado vacío, el delegate (SELECT/MENU) y refresh().
+    public static function hasApiKey() as Lang.Boolean {
+        var key = Properties.getValue("api_key") as Lang.String;
+        return key != null && key.length() >= 8;
+    }
+
+    //! Guarda la API key tecleada EN EL RELOJ (sideload por USB: no hay
+    //! editor de ajustes de Garmin Connect). Valida el mismo umbral de
+    //! refresh(); si no vale, devuelve false SIN tocar nada. Si vale, la
+    //! persiste en Properties y borra el último error persistido (B3, la
+    //! clave de fail()/getLastErr()) para que al volver a la vista no
+    //! reaparezca "Falta la API key".
+    public static function saveApiKey(key as Lang.String) as Lang.Boolean {
+        if (key == null || key.length() < 8) {
+            return false;
+        }
+        Properties.setValue("api_key", key);
+        // B3: borrar el "Falta la API key" persistido (misma clave que
+        // fail()/getLastErr()); el cast evita el aviso por la clave sin tipo.
+        Application.Storage.deleteValue(QuotaStore.LAST_ERR_KEY as Lang.String);
+        return true;
+    }
+
     //! Fires a request to the NaN Cloud API. The callback receives
     //! (state as CreditState or Null, error as String or Null).
     public static function refresh(callback as Method(state as CreditState or Null, err as Lang.String or Null)) {
         QuotaStore.sCallback = callback;
 
-        // B2: TODO intento (incluso el que acaba en "Sin API key") se marca al
-        // INICIAR; en fail() se re-escribe al concluir. Así el anti-rebote de
-        // onShow() no re-dispara la red en cada apertura.
+        // B2: TODO intento (incluso el que acaba en "Falta la API key") se
+        // marca al INICIAR; en fail() se re-escribe al concluir. Así el
+        // anti-rebote de onShow() no re-dispara la red en cada apertura.
         Application.Storage.setValue(QuotaStore.ATTEMPT_KEY, QuotaStore.nowEpoch());
 
-        var key = Properties.getValue("api_key") as Lang.String;
-        if (key == null || key.length() < 8) {
-            QuotaStore.fail("Sin API key (ajustes)");
+        if (!QuotaStore.hasApiKey()) {
+            QuotaStore.fail("Falta la API key");
             return;
         }
+        var key = Properties.getValue("api_key") as Lang.String;
 
         var options = {
             :method => Communications.HTTP_REQUEST_METHOD_GET,

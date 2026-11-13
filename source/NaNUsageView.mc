@@ -3,6 +3,7 @@ using Toybox.WatchUi;
 using Toybox.Graphics;
 using Toybox.System;
 using Toybox.Math;
+using Toybox.Application.Properties;
 
 // =============================================================================
 // PIEL DE MARCA "nan.builders" — mapeo hex de marca -> paleta segura del fr955.
@@ -63,7 +64,9 @@ using Toybox.Math;
 //! la pantalla de desglose por modelos (NaNUsageBreakdownView, pushed con su
 //! delegate); el ciclo completo es Principal -> Desglose -> Proyección ->
 //! Principal (UP retrocede; detalles en el delegate del desglose). Esta
-//! pantalla es la "1/3" del indicador discreto bajo el arco.
+//! pantalla es la "1/3" del indicador discreto bajo el arco. SIN API key,
+//! SELECT abre el editor de texto del reloj y MENU lo abre siempre (cambiar
+//! la key en apps instaladas por USB, sin editor de ajustes de Garmin).
 class NaNUsageView extends WatchUi.View {
 
     // --- geometría del arco (mockup SVG, sin cambios) ---
@@ -246,6 +249,19 @@ class NaNUsageView extends WatchUi.View {
     //! SYNC_TIMEOUT_MS mientras una petición sigue en vuelo.
     function forceSync() {
         sync();
+    }
+
+    //! Abre el editor de texto del RELOJ para introducir o cambiar la API key
+    //! (una app instalada por USB no tiene el editor de ajustes de Garmin
+    //! Connect). Si ya hay key se precarga para corregirla; si no, el prefijo
+    //! "sk-" ahorra teclas. El resultado lo maneja ApiKeyPickerDelegate.
+    function openKeyPicker() as Void {
+        var precarga = "sk-";
+        if (QuotaStore.hasApiKey()) {
+            precarga = Properties.getValue("api_key") as Lang.String;
+        }
+        WatchUi.pushView(new WatchUi.TextPicker(precarga),
+            new ApiKeyPickerDelegate(self), WatchUi.SLIDE_UP);
     }
 
     function onSyncDone(state as CreditState or Null, err as Lang.String or Null) as Void {
@@ -869,12 +885,18 @@ class NaNUsageView extends WatchUi.View {
         // Hint medido también (212 px se salaban del margen de diseño):
         // escalera "pulsa SELECT para reintentar" -> "SELECT para reintentar"
         // -> recorte con ".."; "esperando al movil" (137) siempre cabe.
+        // SIN key (sideload) el hint invita a introducirla y degrada a
+        // "SELECT: poner API key" (la versión corta del mismo mensaje).
+        var hasKey = QuotaStore.hasApiKey();
         var hint = mSyncing ? "esperando al movil" : "pulsa SELECT para reintentar";
+        if (!hasKey) {
+            hint = "SELECT para poner la API key";
+        }
         var fHint = Graphics.FONT_XTINY;
         var yHint = cy + sc(36);
         var availH = chordAvail(dc, yHint, dc.getFontHeight(fHint));
         if (dc.getTextWidthInPixels(hint, fHint) > availH) {
-            hint = "SELECT para reintentar";
+            hint = hasKey ? "SELECT para reintentar" : "SELECT: poner API key";
         }
         if (dc.getTextWidthInPixels(hint, fHint) > availH) {
             hint = fitToWidth(dc, hint, fHint, availH);
@@ -1049,14 +1071,61 @@ class NaNUsageDelegate extends WatchUi.BehaviorDelegate {
         if (views != null && views.size() > 0) {
             var appView = views[0] as NaNUsageView;
             if (appView != null) {
-                // Política punto 4: SELECT fuerza el refresco SIEMPRE,
-                // bypassando el anti-rebote de onShow() (que sólo mira
-                // lastAttempt/lastFetch); sync() sólo retiene la llamada
-                // mientras la petición anterior siga EN VUELO (< 20 s), de
-                // modo que no puede haber dos peticiones simultáneas.
-                appView.forceSync();
+                // SIN key (sideload): SELECT abre el editor del reloj en vez
+                // de lanzar una petición que fallaría con "Falta la API key".
+                if (!QuotaStore.hasApiKey()) {
+                    appView.openKeyPicker();
+                } else {
+                    // Política punto 4: SELECT fuerza el refresco SIEMPRE,
+                    // bypassando el anti-rebote de onShow() (que sólo mira
+                    // lastAttempt/lastFetch); sync() sólo retiene la llamada
+                    // mientras la petición anterior siga EN VUELO (< 20 s), de
+                    // modo que no puede haber dos peticiones simultáneas.
+                    appView.forceSync();
+                }
             }
         }
+        return true;
+    }
+
+    //! MENU abre SIEMPRE el editor de la API key: sirve para CAMBIARLA
+    //! después de la primera vez (SELECT sigue siendo refrescar/pedirla).
+    //! En los modelos sin tecla MENU el firmware no lo invoca (no-op).
+    function onMenu() as Lang.Boolean {
+        var views = WatchUi.getCurrentView();
+        if (views != null && views.size() > 0) {
+            var appView = views[0] as NaNUsageView;
+            if (appView != null) {
+                appView.openKeyPicker();
+            }
+        }
+        return true;
+    }
+}
+
+//! Delegate del TextPicker de la API key. Confirmar cierra el editor y, si
+//! la key es válida (QuotaStore.saveApiKey), lanza un refresco inmediato;
+//! cancelar vuelve a la vista sin tocar nada.
+class ApiKeyPickerDelegate extends WatchUi.TextPickerDelegate {
+
+    private var mView as NaNUsageView;   //!< NaNUsageView que abrió el picker
+
+    function initialize(view as NaNUsageView) {
+        TextPickerDelegate.initialize();
+        mView = view;
+    }
+
+    function onTextEntered(text as Lang.String, changed as Lang.Boolean) as Lang.Boolean {
+        WatchUi.popView(WatchUi.SLIDE_DOWN);
+        if (QuotaStore.saveApiKey(text)) {
+            mView.forceSync();          // sync() ya repinta (requestUpdate)
+            WatchUi.requestUpdate();    // defensa: repintar el estado vacío
+        }
+        return true;
+    }
+
+    function onCancel() as Lang.Boolean {
+        WatchUi.popView(WatchUi.SLIDE_DOWN);
         return true;
     }
 }
