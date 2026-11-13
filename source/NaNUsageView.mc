@@ -110,15 +110,22 @@ class NaNUsageView extends WatchUi.View {
     // mitad inferior. El badge ahora se ancla MEDIANTE getFontHeight() en
     // drawBadge(): badgeY = SUB_Y + hXTINY + 2 -> 157..174 (margen real de
     // 2 px bajo el subtítulo). Las filas y el isotipo se re-flujan abajo.
-    private const ROW_BASE = 192;       // top del texto fila 1: 192 - 16 = 176,
-                                        // 2 px bajo el badge (fin 174). Antes 174.
-    private const ROW_PITCH = 17;       // 192 / 209 / 226
+    // FIX solape filas (foto fr970 454x454, y también 2-3 px en fr955): con
+    // un paso fijo de 17 la barra de cada fila (base+5..+7) pisaba la tinta
+    // de las mayúsculas de la fila siguiente. Ahora la geometría sale de las
+    // métricas REALES de FONT_XTINY (ver rowPitch()): tinta de la fila 1 a
+    // ROW_TOP_GAP bajo el badge; paso = mayúsculas + ROW_BAR_GAP + barra +
+    // ROW_GAP_BELOW. En fr955: tinta 178.., bases 191/210/229, barras
+    // 193/212/231 (la última acaba en 233, como antes) e isotipo en 236.
+    private const ROW_TOP_GAP = 4;      // badge -> tinta de la fila 1
+    private const ROW_BAR_GAP = 2;      // base -> barra
+    private const ROW_GAP_BELOW = 1;    // barra -> tinta de la fila siguiente
     private const ROW_HALF = 66;        // filas de x=cx-66 a x=cx+66 (64..196)
     private const BAR_H = 3;            // barra de consumo (alto 3)
     private const ISO_SIZE = 16;        // isotipo mini 16x16
-    private const ISO_Y = 236;          // 2 px bajo la barra de la fila 3
-                                        // (231..234); antes 224. Esquina inferior
-                                        // (138,252): r=122.3 < 129 del centro.
+    private const ISO_GAP = 2;          // barra de la fila 3 -> isotipo
+                                        // (fr955: 236..252; esquina (138,252):
+                                        // r=122.3 < 129 del centro)
     private const MAX_ROWS = 3;
 
     // Política de refresco (batería primero): CERO red en background (sin
@@ -634,6 +641,35 @@ class NaNUsageView extends WatchUi.View {
     //! fija de 82 px y "RESET EN 20 D" la desbordaba. Si el texto no cupiera
     //! en el área segura del círculo se ABREVA en dos pasos ("RESET · 20 D"
     //! -> "20 D") en lugar de desbordar; la Y anclada a la fuente no cambia.
+    //! Bottom del badge (y + alto): ancla de las filas.
+    private function badgeBottom(dc as Graphics.Dc) as Lang.Number {
+        return sc(SUB_Y) + dc.getFontHeight(Graphics.FONT_XTINY) + sc(2)
+            + sc(BADGE_H);
+    }
+
+    //! Altura de mayúsculas/dígitos de FONT_XTINY: la API no la expone; en
+    //! las Roboto de Garmin es ~0,62 de la altura de celda (fr955 13/21,
+    //! fr970 medida en simulador 22/37).
+    private function capHeight(dc as Graphics.Dc) as Lang.Number {
+        return (0.62 * dc.getFontHeight(Graphics.FONT_XTINY) + 0.5).toNumber();
+    }
+
+    //! Paso entre filas: mayúsculas + aire + barra + aire (fr955: 19).
+    private function rowPitch(dc as Graphics.Dc) as Lang.Number {
+        return capHeight(dc) + sc1(ROW_BAR_GAP) + sc1(BAR_H) + sc1(ROW_GAP_BELOW);
+    }
+
+    //! Línea base de la fila i (0-based).
+    private function rowBase(dc as Graphics.Dc, i as Lang.Number) as Lang.Number {
+        return badgeBottom(dc) + sc(ROW_TOP_GAP) + capHeight(dc) + i * rowPitch(dc);
+    }
+
+    //! Top del isotipo: bajo la barra de la ÚLTIMA fila posible (posición
+    //! fija aunque haya menos de 3 modelos).
+    private function isoY(dc as Graphics.Dc) as Lang.Number {
+        return rowBase(dc, MAX_ROWS - 1) + sc1(ROW_BAR_GAP) + sc1(BAR_H) + sc(ISO_GAP);
+    }
+
     private function drawBadge(dc as Graphics.Dc, cx as Lang.Number, days, frozen as Lang.Boolean) as Void {
         // Anclaje vertical común (FIX solape): margen real bajo el subtítulo,
         // midiendo la fuente en lugar de una Y fija (FONT_XTINY = 21 px en
@@ -701,7 +737,7 @@ class NaNUsageView extends WatchUi.View {
     // -------------------------------------------------------------------------
     private function drawRows(dc as Graphics.Dc, cx as Lang.Number) as Void {
         var models = mState.models();
-        var ascent = (0.78 * dc.getFontHeight(Graphics.FONT_XTINY)).toNumber();
+        var ascent = Graphics.getFontAscent(Graphics.FONT_XTINY);
         var rowHalf = sc(ROW_HALF);
         var left = cx - rowHalf;
         var right = cx + rowHalf;
@@ -717,13 +753,13 @@ class NaNUsageView extends WatchUi.View {
             var f = m.windowFraction(mState.windowTotal());
             var creditTxt = QuotaStore.creditLabel(m.credits());
 
-            var baseY = sc(ROW_BASE) + i * sc(ROW_PITCH);   // 192 / 209 / 226
+            var baseY = rowBase(dc, i);                     // 191 / 210 / 229
             var topY = baseY - ascent;
-            var barY = baseY + sc(5);                       // 197 / 214 / 231
+            var barY = baseY + sc1(ROW_BAR_GAP);            // 193 / 212 / 231
 
             var creditW = dc.getTextWidthInPixels(creditTxt, Graphics.FONT_XTINY);
             // Etiqueta corta ÚNICA ya en MAYÚSCULAS (QuotaStore.assignLabels:
-            // "glm5.3" y "glm5.3-flash" -> "GLM5.3" y "GLM5.3-F").
+            // "glm5.3" y "glm5.3-flash" -> "GLM5.3" y "GLM5.3F").
             var name = fitName(dc, m.label(),
                 right - creditW - sc(6) - left);
 
@@ -754,7 +790,7 @@ class NaNUsageView extends WatchUi.View {
     //! tocar la barra de la fila 3 (231..233) ni el isotipo (borde cx+8).
     private function drawScreenIndicator(dc as Graphics.Dc, cx as Lang.Number) as Void {
         dc.setColor(Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
-        dc.drawText(cx + sc(ISO_SIZE) / 2 + sc(2), sc(ISO_Y) - sc(2), Graphics.FONT_XTINY,
+        dc.drawText(cx + sc(ISO_SIZE) / 2 + sc(2), isoY(dc) - sc(2), Graphics.FONT_XTINY,
             "1/3", Graphics.TEXT_JUSTIFY_LEFT);
     }
 
@@ -765,13 +801,13 @@ class NaNUsageView extends WatchUi.View {
     //! (138,252) está a r=122.3 < 129 del centro.
     private function drawIsoMini(dc as Graphics.Dc, cx as Lang.Number) as Void {
         var isoSz = sc(ISO_SIZE);
-        var isoY = sc(ISO_Y);
+        var isoTop = isoY(dc);
         if (mIsoMini != null) {
-            drawBmp(dc, cx - isoSz / 2, isoY, ISO_SIZE, ISO_SIZE, mIsoMini);
+            drawBmp(dc, cx - isoSz / 2, isoTop, ISO_SIZE, ISO_SIZE, mIsoMini);
             return;
         }
         // Fallback con primitivas: hexágono pointy-top bicolor + infinito blanco.
-        var top = isoY;
+        var top = isoTop;
         var midY = top + isoSz / 2;
         var bot = top + isoSz - 1;
         var q = (isoSz / 2 - 1);   // semiancho de los lados verticales

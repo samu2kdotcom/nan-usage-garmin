@@ -53,7 +53,7 @@ class ModelCredit {
         return f;
     }
 
-    //! Etiqueta CORTA y ÚNICA de la lista (p.ej. "GLM5.3-F"); la calcula
+    //! Etiqueta CORTA y ÚNICA de la lista (p.ej. "GLM5.3F"); la calcula
     //! QuotaStore.assignLabels() sobre la lista COMPLETA (desambiguación de
     //! prefijos repetidos) y viaja con el objeto. Fallback defensivo: el
     //! nombre crudo del modelo si por algún motivo no tuviera etiqueta.
@@ -257,120 +257,216 @@ class QuotaStore {
         return out;
     }
 
-    //! Base de una abreviatura: lo anterior al primer "-" ("glm5.3-flash" ->
-    //! "glm5.3") o el nombre completo si no lleva guion ("glm5.3").
-    private static function baseName(model as Lang.String) as Lang.String {
+    //! Minúsculas ASCII (gemela de upperAscii) por si la API mezclara cajas.
+    private static function lowerAscii(s as Lang.String) as Lang.String {
+        var lower = "abcdefghijklmnopqrstuvwxyz";
+        var upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        var out = "";
+        for (var i = 0; i < s.length(); i++) {
+            var ch = s.substring(i, i + 1);
+            if (ch == null) {
+                break;
+            }
+            var idx = upper.find(ch);
+            out += (idx == null || idx < 0) ? ch : lower.substring(idx, idx + 1);
+        }
+        return out;
+    }
+
+    //! Abreviatura de la FAMILIA del modelo. Las de hasta 4-5 letras se
+    //! quedan tal cual (GLM, KIMI, MIMO, LLAMA); las largas se acortan
+    //! (deepseek -> DS) y qwen pasa a QW (es la más repetida en la lista). Familia desconocida y larga: sus 4 primeras letras.
+    private static function familyAbbr(f as Lang.String) as Lang.String {
+        var keys = ["deepseek", "minimax", "hunyuan", "mistral", "gemini",
+            "claude", "nemotron", "baichuan", "doubao", "longcat", "magistral",
+            "codestral", "devstral", "qwen"];
+        var vals = ["DS", "MM", "HY", "MIS", "GEM", "CL", "NEMO", "BC", "DB",
+            "LC", "MAG", "COD", "DEV", "QW"];
+        for (var i = 0; i < keys.size(); i++) {
+            if (f.equals(keys[i])) {
+                return vals[i];
+            }
+        }
+        var u = QuotaStore.upperAscii(f);
+        return (u.length() > 5) ? u.substring(0, 4) : u;
+    }
+
+    //! Abreviatura de una palabra de VARIANTE (flash -> F, pro -> PRO...).
+    //! Desconocida: sus 3 primeras letras en mayúsculas.
+    private static function variantAbbr(v as Lang.String) as Lang.String {
+        var keys = ["flash", "pro", "max", "mini", "lite", "turbo", "plus",
+            "air", "thinking", "think", "instruct", "coder", "chat", "preview",
+            "exp", "reasoner", "omni", "ultra", "nano", "large", "medium",
+            "small", "vision", "versatile", "latest", "base", "distill"];
+        var vals = ["F", "PRO", "MAX", "MINI", "L", "T", "PLUS", "AIR", "TH",
+            "TH", "I", "C", "CHAT", "P", "X", "R", "O", "U", "N", "L", "M",
+            "S", "V", "", "", "", "D"];
+        for (var i = 0; i < keys.size(); i++) {
+            if (v.equals(keys[i])) {
+                return vals[i];
+            }
+        }
+        var u = QuotaStore.upperAscii(v);
+        return (u.length() > 3) ? u.substring(0, 3) : u;
+    }
+
+    //! Etiqueta COMPACTA de un id de modelo, sin puntos suspensivos en lo
+    //! posible: familia abreviada + versión + variantes abreviadas, todo
+    //! pegado. Ejemplos: "deepseek4.1flash" / "deepseek-v4.1-flash" ->
+    //! "DS4.1F"; "deepseek4.1pro" -> "DS4.1PRO"; "glm5.3-flash" ->
+    //! "GLM5.3F"; "hunyuan-4" -> "HY4"; "kimi-k3" -> "KIMI-K3"; "minimax-m2"
+    //! -> "MM-M2"; "qwen3-235b-a22b-instruct-2507" -> "QW3I".
+    //! Reglas: se ignora el prefijo de proveedor ("org/"); la "v" pegada a
+    //! la versión cae (v4 -> 4); los tamaños ("235b", "a22b") y las fechas
+    //! (números de >= 4 cifras sin punto) se descartan; una letra pegada a
+    //! un número que no sea "v" (k3, m2, r1) forma parte de la versión y va
+    //! tras guion si la etiqueta acaba en letra.
+    public static function shortLabel(model as Lang.String) as Lang.String {
         if (model == null) {
             return "";
         }
-        var idx = model.find("-");
-        if (idx != null && idx > 0) {
-            return model.substring(0, idx);
+        var s = QuotaStore.lowerAscii(model) as Lang.String;
+        var slash = s.find("/");
+        while (slash != null && slash >= 0 && slash + 1 < s.length()) {
+            s = s.substring(slash + 1, s.length()) as Lang.String;
+            slash = s.find("/");
         }
-        return model;
-    }
-
-    //! Discriminador del sufijo para bases repetidas: "-F"/"-M"/"-P" derivado
-    //! de flash/max/pro, o las 2-3 primeras letras del sufijo ("-V4" para
-    //! "deepseek-v4"); "" si el modelo no lleva sufijo (el base pelado se
-    //! queda SIN discriminador, p.ej. "glm5.3" junto a "glm5.3-flash").
-    private static function suffixDisc(model as Lang.String) as Lang.String {
-        var idx = model.find("-");
-        if (idx == null || idx < 0 || idx + 1 >= model.length()) {
-            return "";
-        }
-        var suffix = model.substring(idx + 1, model.length());
-        var dash = suffix.find("-");
-        var seg = (dash == null || dash < 0) ? suffix : suffix.substring(0, dash);
-        if (seg.equals("flash")) {
-            return "-F";
-        }
-        if (seg.equals("max")) {
-            return "-M";
-        }
-        if (seg.equals("pro")) {
-            return "-P";
-        }
-        if (seg.length() > 0) {
-            var take = (seg.length() < 3) ? seg.length() : 3;
-            return "-" + QuotaStore.upperAscii(seg.substring(0, take));
-        }
-        return "";
-    }
-
-    //! Alarga la etiqueta de `m` con letras del sufijo completo hasta dejar de
-    //! coincidir con `avoid` (paso anti-colisión de assignLabels). El pase
-    //! numérico final del llamador garantiza el término si esto no bastara.
-    private static function widenLabel(m as ModelCredit, avoid as Lang.String) as Lang.String {
-        var model = m.model();
-        var base = QuotaStore.upperAscii(QuotaStore.baseName(model));
-        var idx = model.find("-");
-        if (idx == null || idx < 0 || idx + 1 >= model.length()) {
-            return base;                    // sin sufijo: numérico en el llamador
-        }
-        var suffix = model.substring(idx + 1, model.length());
-        for (var k = 1; k <= suffix.length(); k++) {
-            var cand = base + "-" + QuotaStore.upperAscii(suffix.substring(0, k));
-            if (!cand.equals(avoid)) {
-                return cand;
+        // Tramos: [tipo, texto, pegado-al-anterior] con tipo 0 = letras,
+        // 1 = número (dígitos y puntos); cualquier otro carácter separa.
+        var runs = [];
+        var cur = "";
+        var curType = -1;
+        var attached = false;
+        var sep = false;
+        var chars = s.toCharArray();
+        for (var i = 0; i <= chars.size(); i++) {
+            var t = -1;
+            var c = null;
+            if (i < chars.size()) {
+                c = chars[i];
+                var n = (c as Lang.Char).toNumber();
+                if (n >= 97 && n <= 122) {
+                    t = 0;
+                } else if ((n >= 48 && n <= 57) || (n == 46 && curType == 1)) {
+                    t = 1;
+                }
+            }
+            if (t != curType || t == -1) {
+                if (curType >= 0 && cur.length() > 0) {
+                    runs.add([curType, cur, attached]);
+                }
+                attached = (t >= 0 && curType >= 0 && !sep);
+                sep = (t == -1);
+                cur = "";
+                curType = t;
+            }
+            if (t >= 0) {
+                cur += (c as Lang.Char).toString();
             }
         }
-        return base + "-" + QuotaStore.upperAscii(suffix);
+        if (runs.size() == 0) {
+            return QuotaStore.upperAscii(model);
+        }
+
+        var out = "";
+        var start = 0;
+        if (runs[0][0] == 0) {
+            out = QuotaStore.familyAbbr(runs[0][1]);
+            start = 1;
+        }
+        var prefix = "";
+        var k = start;
+        while (k < runs.size()) {
+            var r = runs[k];
+            var txt = r[1] as Lang.String;
+            var nxt = (k + 1 < runs.size()) ? runs[k + 1] : null;
+            if (r[0] == 0) {
+                // Letra suelta pegada a un número que la sigue: prefijo de
+                // versión (v cae; k/m/r... se conservan).
+                if (txt.length() == 1 && nxt != null && nxt[0] == 1
+                        && nxt[2] == true) {
+                    prefix = txt.equals("v") ? "" : QuotaStore.upperAscii(txt);
+                    k++;
+                    continue;
+                }
+                out += QuotaStore.variantAbbr(txt);
+                k++;
+                continue;
+            }
+            // Número: tamaño ("235b"/"a22b") o fecha (>= 4 cifras sin punto)
+            // -> se descarta junto con su prefijo.
+            var isSize = (nxt != null && nxt[0] == 0 && nxt[2] == true
+                && (nxt[1].equals("b") || nxt[1].equals("m")
+                    || nxt[1].equals("k")));
+            if (isSize) {
+                prefix = "";
+                k += 2;
+                continue;
+            }
+            if (txt.find(".") == null && txt.length() >= 4) {
+                prefix = "";
+                k++;
+                continue;
+            }
+            var piece = prefix + txt;
+            if (prefix.length() > 0 && QuotaStore.endsWithLetter(out)) {
+                out += "-";
+            }
+            out += piece;
+            prefix = "";
+            k++;
+        }
+        if (out.length() == 0) {
+            return QuotaStore.upperAscii(model);
+        }
+        return out;
+    }
+
+    private static function endsWithLetter(s as Lang.String) as Lang.Boolean {
+        if (s.length() == 0) {
+            return false;
+        }
+        var n = s.toCharArray()[s.length() - 1].toNumber();
+        return (n >= 65 && n <= 90) || (n >= 97 && n <= 122);
     }
 
     //! Asigna a cada ModelCredit de la lista una etiqueta corta (MAYÚSCULAS)
-    //! y ÚNICA: base pelado cuando el prefijo no se repite ("deepseek" ->
-    //! "DEEPSEEK"); con discriminador cuando sí ("glm5.3" -> "GLM5.3" y
-    //! "glm5.3-flash" -> "GLM5.3-F"). Garantía: NUNCA dos etiquetas iguales
-    //! en la misma lista (pase anti-colisión + fallback numérico).
+    //! y ÚNICA con shortLabel() ("glm5.3" -> "GLM5.3", "glm5.3-flash" ->
+    //! "GLM5.3F", "deepseek-v4" -> "DS4"). Garantía: NUNCA dos etiquetas
+    //! iguales en la misma lista: si dos ids compactan igual, la segunda y
+    //! siguientes se numeran ("DS4", "DS4-2").
     public static function assignLabels(models as Lang.Array) as Void {
         var n = models.size();
         if (n == 0) {
             return;
         }
-        var bases = [];
         var labels = [];
         for (var i = 0; i < n; i++) {
-            var m0 = models[i] as ModelCredit;
-            bases.add((m0 == null) ? "" : QuotaStore.baseName(m0.model()));
-            labels.add("");
+            var m = models[i] as ModelCredit;
+            labels.add((m == null) ? "" : QuotaStore.shortLabel(m.model()));
         }
         for (var i = 0; i < n; i++) {
-            var m = models[i] as ModelCredit;
-            if (m == null || bases[i].equals("")) {
+            if (labels[i].equals("")) {
                 continue;
             }
-            var dup = false;
-            for (var j = 0; j < n; j++) {
-                if (j != i && bases[j].equals(bases[i])) {
-                    dup = true;
-                    break;
-                }
-            }
-            var lb = QuotaStore.upperAscii(bases[i]);
-            if (dup) {
-                lb += QuotaStore.suffixDisc(m.model());
-            }
-            labels[i] = lb;
-        }
-        // Pase anti-colisión: si quedan dos etiquetas iguales, la segunda se
-        // alarga con letras del sufijo; si ni así, se numera.
-        var guard = 0;
-        var changed = true;
-        while (changed && guard < 8) {
-            changed = false;
-            guard++;
-            for (var i = 0; i < n; i++) {
-                for (var j = i + 1; j < n; j++) {
-                    if (labels[i].equals(labels[j]) && !labels[i].equals("")) {
-                        var w = QuotaStore.widenLabel(models[j] as ModelCredit,
-                            labels[j]);
-                        if (w.equals(labels[j])) {
-                            w = labels[j] + "-" + (j + 1);
+            var seq = 1;
+            for (var j = i + 1; j < n; j++) {
+                if (labels[j].equals(labels[i])) {
+                    // siguiente sufijo libre en TODA la lista
+                    var cand = labels[i];
+                    var free = false;
+                    while (!free) {
+                        seq++;
+                        cand = labels[i] + "-" + seq;
+                        free = true;
+                        for (var q = 0; q < n; q++) {
+                            if (labels[q].equals(cand)) {
+                                free = false;
+                                break;
+                            }
                         }
-                        labels[j] = w;
-                        changed = true;
                     }
+                    labels[j] = cand;
                 }
             }
         }
