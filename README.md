@@ -44,10 +44,9 @@ La app lee `https://api.nan.builders/v1/usage` con tu API key (`sk-…`, se crea
 
 En modelos con pantalla táctil (fr965, fr265, fr970, fēnix 7) el teclado es en pantalla; en los de solo botones (fr955, fr255) se navega con los botones — un par de minutos, una sola vez.
 
-Alternativas (opcionales):
+Alternativa (opcional):
 
-- **Build personal** con la key ya horneada en el binario — pídelo en un issue indicando tu modelo de reloj.
-- **Compilártelo tú** en 2 min: escribe tu key en `resources/properties/properties.xml` y compila (ver abajo). ⚠️ Ese `.prg` lleva la key en claro: no lo compartas ni lo subas a ningún sitio.
+- **Compilártelo tú** en 2 min, solo en local: escribe tu key en `resources/properties/properties.xml` y compila (ver abajo). ⚠️ Ese `.prg` lleva la key en claro: es solo para tu reloj — no lo compartas ni lo subas a ningún sitio.
 
 ## Compilar desde fuente
 
