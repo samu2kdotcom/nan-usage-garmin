@@ -38,6 +38,7 @@ class NaNUsageGlanceView extends WatchUi.GlanceView {
 
     private var mWordmark;   //!< BitmapResource del wordmark, o null
     private var mIsoMini;    //!< BitmapResource del isotipo mini, o null
+    private var mInset = 7; //!< inset lateral (px) de la caja de glance
     private var mS = 1.0;    //!< escala = min(w/176, h/93) (caja de glance fr955)
 
     //! Recalcula la escala desde la caja real de la glance (base 176x93).
@@ -45,6 +46,13 @@ class NaNUsageGlanceView extends WatchUi.GlanceView {
         var sx = dc.getWidth() / 176.0;
         var sy = dc.getHeight() / 93.0;
         mS = (sx < sy) ? sx : sy;
+        mInset = sc(PAD);
+    }
+
+    //! Margen superior mínimo (>= 3 px aun con gs < 1).
+    private function topPad() as Lang.Number {
+        var t = sc(3);
+        return (t < 3) ? 3 : t;
     }
 
     //! Escala un valor de diseño (px a 176x93); identidad exacta con s=1.0.
@@ -146,18 +154,18 @@ class NaNUsageGlanceView extends WatchUi.GlanceView {
     //! Devuelve la y donde cuelga el contenido (26 / 6 / 5).
     private function drawBrandHeader(dc as Graphics.Dc, w as Lang.Number, level as Lang.Number) as Lang.Number {
         if (level == 2) {
-            return sc(5);
+            return (sc(5) < 5) ? 5 : sc(5);
         }
         if (level == 1) {
             dc.setColor(Graphics.COLOR_DK_GRAY, Graphics.COLOR_TRANSPARENT);
-            dc.drawLine(sc(7), sc(3), w - sc(7), sc(3));
-            return sc(3) + sc(3);
+            dc.drawLine(mInset, topPad(), w - mInset, topPad());
+            return topPad() + sc(3);
         }
 
-        var pad = sc(PAD);
+        var pad = mInset;
         var isoH = sc(16);
         var wmH = sc(15);
-        var y0 = sc(3);
+        var y0 = topPad();
 
         // Isotipo mini (bitmap oficial cuantizado, fallback con primitivas).
         if (mIsoMini != null) {
@@ -224,8 +232,9 @@ class NaNUsageGlanceView extends WatchUi.GlanceView {
     //! la cabecera por nivel, SIN pintarla (0 -> hairline (3+16+4) + 3 = 26;
     //! 1 -> 3 + 3 = 6; 2 -> 5).
     private function brandTopY(level as Lang.Number) as Lang.Number {
-        return (level == 2) ? sc(5)
-            : ((level == 1) ? (sc(3) + sc(3)) : (sc(3) + sc(16) + sc(4) + sc(3)));
+        return (level == 2) ? ((sc(5) < 5) ? 5 : sc(5))
+            : ((level == 1) ? (topPad() + sc(3))
+            : (topPad() + sc(16) + sc(4) + sc(3)));
     }
 
     //! Edad del último fetch, "HACE 45S" / "HACE 3 MIN" / "HACE 2 H" / "HACE
@@ -343,7 +352,7 @@ class NaNUsageGlanceView extends WatchUi.GlanceView {
         var gapLbl = sc(GAP_LBL);
         var gapStack = sc(GAP_STACK);
         var gapRow = sc(GAP_ROW);
-        var pad = sc(PAD);
+        var pad = mInset;
         var heroW = numW + gapHero + pctW;
 
         // Bloque derecho: valor "3.0K" en color de severidad (FONT_GLANCE) +
@@ -365,6 +374,18 @@ class NaNUsageGlanceView extends WatchUi.GlanceView {
         // mínimo; si no, apilado (etiqueta sobre valor). En 176 px con "57%"
         // (42) + "QUEDAN" (62) + "3.0K" (38) caben en línea (7+42+3+62+2+38+7
         // = 161 <= 176); con "100%" o valores anchos pasa a apilado.
+        // Caja ancha (franja de relojes redondos: sus esquinas caen fuera del
+        // bisel y Garmin las recorta): inset lateral del 12 % del ancho por
+        // lado, siempre que héroe + bloque derecho quepan con él. La caja base
+        // 176x93 (ratio 1.89) no cumple w > 2h: fr955 queda intacto.
+        if (w > 2 * h) {
+            var colW = (lblW > valW) ? lblW : valW;
+            var ins = (w * 12) / 100;
+            if (ins > pad && heroW + gapMin + colW + 2 * ins <= w) {
+                mInset = ins;
+                pad = ins;
+            }
+        }
         var inline = (pad + heroW + gapMin + lblW + gapLbl + valW + pad <= w);
 
         // Alto de la línea 1 según el modo.
@@ -388,12 +409,15 @@ class NaNUsageGlanceView extends WatchUi.GlanceView {
             brand = 2;                      // oculta la marca
             topY = brandTopY(2);
         }
+        // Orden: la EDAD se sacrifica antes que la etiqueta QUEDAN (en cajas
+        // bajas con fuentes grandes, p. ej. fr265 275x120, QUEDAN apilada
+        // sobre el valor cabe si se omite la edad).
+        if (!glanceFits(h, topY, line1H, hTxt, showAge) && showAge) {
+            showAge = false;
+        }
         if (!glanceFits(h, topY, line1H, hTxt, showAge)) {
             showLbl = false;                // quita la etiqueta QUEDAN
             line1H = (hHero > hVal) ? hHero : hVal;
-        }
-        if (!glanceFits(h, topY, line1H, hTxt, showAge) && showAge) {
-            showAge = false;                // luego la edad
         }
         if (!glanceFits(h, topY, line1H, hTxt, showAge)) {
             fHero = Graphics.FONT_GLANCE;   // héroe más pequeño, nunca oculto
