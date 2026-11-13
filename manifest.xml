@@ -16,6 +16,8 @@
             <iq:product id="fr255m"/>
             <iq:product id="fr265"/>
             <iq:product id="fenix7"/>
+            <iq:product id="fenix7s"/>
+            <iq:product id="fenix7x"/>
         </iq:products>
         <iq:permissions>
             <iq:uses-permission id="Communications"/>

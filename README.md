@@ -25,7 +25,9 @@ Widget Garmin que muestra el consumo de **créditos de tu cuenta de NaN Cloud** 
 | `NaNUsage-fr255.prg` | Forerunner 255 |
 | `NaNUsage-fr255m.prg` | Forerunner 255 Music |
 | `NaNUsage-fr265.prg` | Forerunner 265 |
-| `NaNUsage-fenix7.prg` | fēnix 7 (7S/7X: pedir build) |
+| `NaNUsage-fenix7.prg` | fēnix 7 / 7 Sapphire |
+| `NaNUsage-fenix7s.prg` | fēnix 7S / 7S Sapphire |
+| `NaNUsage-fenix7x.prg` | fēnix 7X / 7X Sapphire (7 Pro: pedir build) |
 
 > **Requisito**: teléfono emparejado con Garmin Connect — la red del reloj pasa por la app de Garmin del móvil (`makeWebRequest` vía BLE).
 
