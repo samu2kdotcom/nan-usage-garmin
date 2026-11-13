@@ -139,6 +139,46 @@ class NaNUsageView extends WatchUi.View {
     private var mWmFontB;      //!< fallback vectorial del wordmark: ".builders"
     private var mWordmark;     //!< BitmapResource del wordmark oficial, o null
     private var mIsoMini;      //!< BitmapResource del isotipo mini, o null
+    private var mS = 1.0;      //!< factor de escala = min(w, h) / 260.0
+
+    //! Recalcula el factor de escala desde el Dc (base de diseño 260x260).
+    //! Si cambia, descarta las fuentes vectoriales cacheadas.
+    private function updateScale(dc as Graphics.Dc) as Void {
+        var m = dc.getWidth();
+        if (dc.getHeight() < m) {
+            m = dc.getHeight();
+        }
+        var s = m / 260.0;
+        if (s != mS) {
+            mS = s;
+            mHeroFont = null;
+            mPctFont = null;
+            mWmFontA = null;
+            mWmFontB = null;
+        }
+    }
+
+    //! Escala un valor de diseño (px a 260x260) y redondea. Con s=1.0 es la
+    //! identidad exacta.
+    private function sc(v as Lang.Numeric) as Lang.Number {
+        return (v * mS + 0.5).toNumber();
+    }
+
+    //! Escala con suelo mínimo de 1 px (grosores).
+    private function sc1(v as Lang.Numeric) as Lang.Number {
+        var r = sc(v);
+        return (r < 1) ? 1 : r;
+    }
+
+    //! Dibuja un bitmap de diseño wxh escalado (drawBitmap nativo si s=1).
+    private function drawBmp(dc as Graphics.Dc, x as Lang.Number, y as Lang.Number,
+            bw as Lang.Number, bh as Lang.Number, bmp) as Void {
+        if (mS != 1.0 && (dc has :drawScaledBitmap)) {
+            dc.drawScaledBitmap(x, y, sc(bw), sc(bh), bmp);
+        } else {
+            dc.drawBitmap(x, y, bmp);
+        }
+    }
 
     function initialize() {
         View.initialize();
@@ -223,6 +263,7 @@ class NaNUsageView extends WatchUi.View {
 
     function onLayout(dc as Graphics.Dc) {
         View.onLayout(dc);
+        updateScale(dc);
     }
 
     // -------------------------------------------------------------------------
@@ -230,6 +271,7 @@ class NaNUsageView extends WatchUi.View {
     // -------------------------------------------------------------------------
     function onUpdate(dc as Graphics.Dc) {
         View.onUpdate(dc);
+        updateScale(dc);
 
         // Anti-aliasing defensivo (fr955 lo soporta, @since 3.2.0).
         if (dc has :setAntiAlias) {
@@ -299,32 +341,35 @@ class NaNUsageView extends WatchUi.View {
     //! mockup. Si el barrido es casi nulo se omite: drawArc con
     //! degreeStart == degreeEnd dibuja un círculo completo.
     private function drawRing(dc as Graphics.Dc, cx as Lang.Number, cy as Lang.Number, frac as Lang.Float) as Void {
-        dc.setPenWidth(ARC_PEN);
+        var arcR = sc(ARC_R);
+        dc.setPenWidth(sc1(ARC_PEN));
 
         // Pista (240 grados, hueco inferior de 120).
         dc.setColor(Graphics.COLOR_DK_GRAY, Graphics.COLOR_TRANSPARENT);
-        dc.drawArc(cx, cy, ARC_R, ARC_DIRECTION, ARC_START, arcEnd(ARC_SWEEP));
+        dc.drawArc(cx, cy, arcR, ARC_DIRECTION, ARC_START, arcEnd(ARC_SWEEP));
 
         // Progreso: el % de créditos consumido de la cuenta (used/allowance),
         // y el semáforo juzga ESE porcentaje.
         var sweep = ARC_SWEEP * frac;
         if (sweep >= 0.5) {
             dc.setColor(severityColor(frac), Graphics.COLOR_TRANSPARENT);
-            dc.drawArc(cx, cy, ARC_R, ARC_DIRECTION, ARC_START, arcEnd(sweep));
+            dc.drawArc(cx, cy, arcR, ARC_DIRECTION, ARC_START, arcEnd(sweep));
         }
 
         // Tres marcas radiales del mockup (30°, 90° y 150°) que cortan el anillo:
         // de r=104 a r=120, en negro, como separadores de los tres tramos.
         dc.setColor(Graphics.COLOR_BLACK, Graphics.COLOR_TRANSPARENT);
-        dc.setPenWidth(3);
+        dc.setPenWidth(sc1(3));
+        var tickIn = sc(104);
+        var tickOut = sc(120);
         var tickAngles = [30, 90, 150];
         for (var i = 0; i < tickAngles.size(); i++) {
             var rad = Math.toRadians(tickAngles[i]);
             var co = Math.cos(rad);
             var si = Math.sin(rad);
             dc.drawLine(
-                cx + (104 * co).toNumber(), cy - (104 * si).toNumber(),
-                cx + (120 * co).toNumber(), cy - (120 * si).toNumber());
+                cx + (tickIn * co).toNumber(), cy - (tickIn * si).toNumber(),
+                cx + (tickOut * co).toNumber(), cy - (tickOut * si).toNumber());
         }
 
         dc.setPenWidth(1);
@@ -362,7 +407,7 @@ class NaNUsageView extends WatchUi.View {
     private function drawHeader(dc as Graphics.Dc, cx as Lang.Number) as Void {
         if (mWordmark != null) {
             // Wordmark oficial rasterizado (96x15, blanco sobre negro).
-            dc.drawBitmap(cx - WM_W / 2, WM_Y, mWordmark);
+            drawBmp(dc, cx - sc(WM_W) / 2, sc(WM_Y), WM_W, 15, mWordmark);
         } else {
             // Fallback vectorial: "naN" en Roboto-Black + ".builders" en
             // RobotoCondensed-RegularItalic (caras verificadas en el fr955).
@@ -371,14 +416,14 @@ class NaNUsageView extends WatchUi.View {
             var wa = dc.getTextWidthInPixels("naN", fa);
             var wb = dc.getTextWidthInPixels(".builders", fb);
             var x = cx - (wa + wb) / 2;
-            var ty = WM_Y - 1;
+            var ty = sc(WM_Y) - 1;
             dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_TRANSPARENT);
             dc.drawText(x, ty, fa, "naN", Graphics.TEXT_JUSTIFY_LEFT);
             dc.drawText(x + wa, ty, fb, ".builders", Graphics.TEXT_JUSTIFY_LEFT);
         }
         // Hairline de 1px en DK_GRAY: una sola línea por vista (regla de marca).
         dc.setColor(Graphics.COLOR_DK_GRAY, Graphics.COLOR_TRANSPARENT);
-        dc.drawLine(cx - 74, HAIR_Y, cx + 74, HAIR_Y);
+        dc.drawLine(cx - sc(74), sc(HAIR_Y), cx + sc(74), sc(HAIR_Y));
     }
 
     //! Héroe: "45" en Roboto-Black 62 blanco + "%" en un SEGUNDO drawText de
@@ -395,21 +440,22 @@ class NaNUsageView extends WatchUi.View {
         var numW = dc.getTextWidthInPixels(num, hf);
         var pctW = dc.getTextWidthInPixels("%", pf);
 
-        var gap = 2;
+        var gap = sc(2);
         var totalW = numW + gap + pctW;
         var x = cx - totalW / 2;
+        var heroBase = sc(HERO_BASE);
 
         // Sin acceso a la ascendente real de una fuente vectorial, la top se
         // deriva de la línea base con la misma proporción que el resto del
         // código (ascendente ~= 0.78 * altura de la fuente).
-        var numTop = HERO_BASE - (0.78 * hh).toNumber();
+        var numTop = heroBase - (0.78 * hh).toNumber();
 
         dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_TRANSPARENT);
         dc.drawText(x, numTop, hf, num, Graphics.TEXT_JUSTIFY_LEFT);
 
         // "%" alineado por la línea de base con el número grande.
         dc.setColor(Graphics.COLOR_PURPLE, Graphics.COLOR_TRANSPARENT);
-        dc.drawText(x + numW + gap, HERO_BASE - (0.78 * ph).toNumber(), pf, "%",
+        dc.drawText(x + numW + gap, heroBase - (0.78 * ph).toNumber(), pf, "%",
             Graphics.TEXT_JUSTIFY_LEFT);
     }
 
@@ -510,7 +556,7 @@ class NaNUsageView extends WatchUi.View {
         }
 
         dc.setColor(color, Graphics.COLOR_TRANSPARENT);
-        dc.drawText(cx, SUB_Y, font, txt, Graphics.TEXT_JUSTIFY_CENTER);
+        dc.drawText(cx, sc(SUB_Y), font, txt, Graphics.TEXT_JUSTIFY_CENTER);
     }
 
     //! Cuerda ÚTIL del círculo para el renglón del subtítulo (fr955 redondo
@@ -533,14 +579,14 @@ class NaNUsageView extends WatchUi.View {
     //! (esquinas a r=86, holgado). Nunca se sacrifican las cifras.
     private function subAvailWidth(dc as Graphics.Dc, font as Graphics.FontType) as Lang.Number {
         var cy = dc.getHeight() / 2;
-        var rGlass = dc.getWidth() / 2 - SUB_MARGIN;
-        var rArc = ARC_R - ARC_PEN / 2 - ARC_CLEAR;
+        var rGlass = dc.getWidth() / 2 - sc(SUB_MARGIN);
+        var rArc = sc(ARC_R) - sc1(ARC_PEN) / 2 - sc(ARC_CLEAR);
         var rSafe = (rGlass < rArc) ? rGlass : rArc;
-        var dyT = SUB_Y - cy;
+        var dyT = sc(SUB_Y) - cy;
         if (dyT < 0) {
             dyT = -dyT;
         }
-        var dyB = SUB_Y + dc.getFontHeight(font) - cy;
+        var dyB = sc(SUB_Y) + dc.getFontHeight(font) - cy;
         if (dyB < 0) {
             dyB = -dyB;
         }
@@ -569,12 +615,15 @@ class NaNUsageView extends WatchUi.View {
         // Anclaje vertical común (FIX solape): margen real bajo el subtítulo,
         // midiendo la fuente en lugar de una Y fija (FONT_XTINY = 21 px en
         // fr955 -> subtítulo 134..155, badge en 157..174).
-        var y = SUB_Y + dc.getFontHeight(Graphics.FONT_XTINY) + 2;
-        var ty = y + (BADGE_H - dc.getFontHeight(Graphics.FONT_XTINY)) / 2;
+        var badgeH = sc(BADGE_H);
+        var badgePad = sc(BADGE_PAD);
+        var badgeMaxW = sc(BADGE_MAX_W);
+        var y = sc(SUB_Y) + dc.getFontHeight(Graphics.FONT_XTINY) + sc(2);
+        var ty = y + (badgeH - dc.getFontHeight(Graphics.FONT_XTINY)) / 2;
 
         if (frozen) {
             var frozenLabel = "CUENTA CONGELADA";
-            if (dc.getTextWidthInPixels(frozenLabel, Graphics.FONT_XTINY) > BADGE_MAX_W) {
+            if (dc.getTextWidthInPixels(frozenLabel, Graphics.FONT_XTINY) > badgeMaxW) {
                 frozenLabel = "CONGELADA";
             }
             dc.setColor(Graphics.COLOR_YELLOW, Graphics.COLOR_TRANSPARENT);
@@ -596,23 +645,23 @@ class NaNUsageView extends WatchUi.View {
         // BUG 2: ancho medido, no constante. El texto manda sobre la caja;
         // el techo BADGE_MAX_W es el del círculo 260x260 (cuerda ~244 px en la
         // y más baja del badge, ver la constante) y si lo excede se abrevia.
-        var wBox = dc.getTextWidthInPixels(label, Graphics.FONT_XTINY) + 2 * BADGE_PAD;
-        if (wBox > BADGE_MAX_W && days != null) {
+        var wBox = dc.getTextWidthInPixels(label, Graphics.FONT_XTINY) + 2 * badgePad;
+        if (wBox > badgeMaxW && days != null) {
             label = "RESET · " + days + " D";           // 1er acorte
-            wBox = dc.getTextWidthInPixels(label, Graphics.FONT_XTINY) + 2 * BADGE_PAD;
-            if (wBox > BADGE_MAX_W) {
+            wBox = dc.getTextWidthInPixels(label, Graphics.FONT_XTINY) + 2 * badgePad;
+            if (wBox > badgeMaxW) {
                 label = "" + days + " D";                // 2º acorte: lo esencial
-                wBox = dc.getTextWidthInPixels(label, Graphics.FONT_XTINY) + 2 * BADGE_PAD;
+                wBox = dc.getTextWidthInPixels(label, Graphics.FONT_XTINY) + 2 * badgePad;
             }
         }
-        if (wBox > BADGE_MAX_W) {
-            wBox = BADGE_MAX_W;     // defensa final; con 4-11 glifos no ocurre
+        if (wBox > badgeMaxW) {
+            wBox = badgeMaxW;     // defensa final; con 4-11 glifos no ocurre
         }
 
         var x = cx - wBox / 2;
 
         dc.setColor(Graphics.COLOR_PURPLE, Graphics.COLOR_TRANSPARENT);
-        dc.fillRectangle(x, y, wBox, BADGE_H);
+        dc.fillRectangle(x, y, wBox, badgeH);
 
         dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_TRANSPARENT);
         dc.drawText(cx, ty, Graphics.FONT_XTINY, label, Graphics.TEXT_JUSTIFY_CENTER);
@@ -630,8 +679,9 @@ class NaNUsageView extends WatchUi.View {
     private function drawRows(dc as Graphics.Dc, cx as Lang.Number) as Void {
         var models = mState.models();
         var ascent = (0.78 * dc.getFontHeight(Graphics.FONT_XTINY)).toNumber();
-        var left = cx - ROW_HALF;
-        var right = cx + ROW_HALF;
+        var rowHalf = sc(ROW_HALF);
+        var left = cx - rowHalf;
+        var right = cx + rowHalf;
 
         for (var i = 0; i < MAX_ROWS && i < models.size(); i++) {
             var m = models[i] as ModelCredit;
@@ -644,15 +694,15 @@ class NaNUsageView extends WatchUi.View {
             var f = m.windowFraction(mState.windowTotal());
             var creditTxt = QuotaStore.creditLabel(m.credits());
 
-            var baseY = ROW_BASE + i * ROW_PITCH;   // 192 / 209 / 226
+            var baseY = sc(ROW_BASE) + i * sc(ROW_PITCH);   // 192 / 209 / 226
             var topY = baseY - ascent;
-            var barY = baseY + 5;                   // 197 / 214 / 231
+            var barY = baseY + sc(5);                       // 197 / 214 / 231
 
             var creditW = dc.getTextWidthInPixels(creditTxt, Graphics.FONT_XTINY);
             // Etiqueta corta ÚNICA ya en MAYÚSCULAS (QuotaStore.assignLabels:
             // "glm5.3" y "glm5.3-flash" -> "GLM5.3" y "GLM5.3-F").
             var name = fitName(dc, m.label(),
-                right - creditW - 6 - left);
+                right - creditW - sc(6) - left);
 
             dc.setColor(Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
             dc.drawText(left, topY, Graphics.FONT_XTINY, name, Graphics.TEXT_JUSTIFY_LEFT);
@@ -662,14 +712,14 @@ class NaNUsageView extends WatchUi.View {
             // Barra: pista DK_GRAY + relleno violeta con la cuota del modelo
             // sobre totals.credits (misma fracción que codifica la barra).
             dc.setColor(Graphics.COLOR_DK_GRAY, Graphics.COLOR_TRANSPARENT);
-            dc.fillRectangle(left, barY, 2 * ROW_HALF, BAR_H);
-            var fillW = (2 * ROW_HALF * f).toNumber();
+            dc.fillRectangle(left, barY, 2 * rowHalf, sc1(BAR_H));
+            var fillW = (2 * rowHalf * f).toNumber();
             if (fillW < 1 && f > 0.0) {
                 fillW = 1;
             }
             if (fillW > 0) {
                 dc.setColor(Graphics.COLOR_PURPLE, Graphics.COLOR_TRANSPARENT);
-                dc.fillRectangle(left, barY, fillW, BAR_H);
+                dc.fillRectangle(left, barY, fillW, sc1(BAR_H));
             }
         }
     }
@@ -681,7 +731,7 @@ class NaNUsageView extends WatchUi.View {
     //! tocar la barra de la fila 3 (231..233) ni el isotipo (borde cx+8).
     private function drawScreenIndicator(dc as Graphics.Dc, cx as Lang.Number) as Void {
         dc.setColor(Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
-        dc.drawText(cx + ISO_SIZE / 2 + 2, ISO_Y - 2, Graphics.FONT_XTINY,
+        dc.drawText(cx + sc(ISO_SIZE) / 2 + sc(2), sc(ISO_Y) - sc(2), Graphics.FONT_XTINY,
             "1/3", Graphics.TEXT_JUSTIFY_LEFT);
     }
 
@@ -691,15 +741,19 @@ class NaNUsageView extends WatchUi.View {
     //! que no hay solape y todo queda dentro del círculo: la esquina
     //! (138,252) está a r=122.3 < 129 del centro.
     private function drawIsoMini(dc as Graphics.Dc, cx as Lang.Number) as Void {
+        var isoSz = sc(ISO_SIZE);
+        var isoY = sc(ISO_Y);
         if (mIsoMini != null) {
-            dc.drawBitmap(cx - ISO_SIZE / 2, ISO_Y, mIsoMini);
+            drawBmp(dc, cx - isoSz / 2, isoY, ISO_SIZE, ISO_SIZE, mIsoMini);
             return;
         }
         // Fallback con primitivas: hexágono pointy-top bicolor + infinito blanco.
-        var top = ISO_Y;
-        var midY = top + ISO_SIZE / 2;
-        var bot = top + ISO_SIZE - 1;
-        var q = (ISO_SIZE / 2 - 1);   // semiancho de los lados verticales
+        var top = isoY;
+        var midY = top + isoSz / 2;
+        var bot = top + isoSz - 1;
+        var q = (isoSz / 2 - 1);   // semiancho de los lados verticales
+        var off = sc(3);
+        var cr = sc1(2);
         var x1 = cx - q;
         var x2 = cx + q;
         var edges = [
@@ -718,8 +772,8 @@ class NaNUsageView extends WatchUi.View {
             dc.drawLine(e[0], e[1], e[2], e[3]);
         }
         dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_TRANSPARENT);
-        dc.drawCircle(cx - 3, midY, 2);
-        dc.drawCircle(cx + 3, midY, 2);
+        dc.drawCircle(cx - off, midY, cr);
+        dc.drawCircle(cx + off, midY, cr);
     }
 
     //! Mayúsculas ASCII: Lang.String no tiene toUpperCase() en el SDK 9.3.0.
@@ -762,7 +816,7 @@ class NaNUsageView extends WatchUi.View {
     //! se MIDEN ahora contra la cuerda y degradan antes de dibujarse.
     private function chordAvail(dc as Graphics.Dc, yTop as Lang.Number, bandH as Lang.Number) as Lang.Number {
         var cy = dc.getHeight() / 2;
-        var rSafe = dc.getWidth() / 2 - SUB_MARGIN;
+        var rSafe = dc.getWidth() / 2 - sc(SUB_MARGIN);
         var dyT = yTop - cy;
         if (dyT < 0) {
             dyT = -dyT;
@@ -817,7 +871,7 @@ class NaNUsageView extends WatchUi.View {
         // -> recorte con ".."; "esperando al movil" (137) siempre cabe.
         var hint = mSyncing ? "esperando al movil" : "pulsa SELECT para reintentar";
         var fHint = Graphics.FONT_XTINY;
-        var yHint = cy + 36;
+        var yHint = cy + sc(36);
         var availH = chordAvail(dc, yHint, dc.getFontHeight(fHint));
         if (dc.getTextWidthInPixels(hint, fHint) > availH) {
             hint = "SELECT para reintentar";
@@ -922,30 +976,36 @@ class NaNUsageView extends WatchUi.View {
         return fallback;
     }
 
+    //! Tamaño de fuente vectorial escalado, con suelo de 10.
+    private function fs(v as Lang.Number) as Lang.Number {
+        var r = sc(v);
+        return (r < 10) ? 10 : r;
+    }
+
     private function heroFont() as Graphics.FontType {
         if (mHeroFont == null) {
-            mHeroFont = loadFont("Roboto-Black", 62, Graphics.FONT_NUMBER_MEDIUM);
+            mHeroFont = loadFont("Roboto-Black", fs(62), Graphics.FONT_NUMBER_MEDIUM);
         }
         return mHeroFont;
     }
 
     private function pctFont() as Graphics.FontType {
         if (mPctFont == null) {
-            mPctFont = loadFont("Roboto-Black", 26, Graphics.FONT_MEDIUM);
+            mPctFont = loadFont("Roboto-Black", fs(26), Graphics.FONT_MEDIUM);
         }
         return mPctFont;
     }
 
     private function wmFontA() as Graphics.FontType {
         if (mWmFontA == null) {
-            mWmFontA = loadFont("Roboto-Black", 16, Graphics.FONT_XTINY);
+            mWmFontA = loadFont("Roboto-Black", fs(16), Graphics.FONT_XTINY);
         }
         return mWmFontA;
     }
 
     private function wmFontB() as Graphics.FontType {
         if (mWmFontB == null) {
-            mWmFontB = loadFont("RobotoCondensed-RegularItalic", 16, Graphics.FONT_XTINY);
+            mWmFontB = loadFont("RobotoCondensed-RegularItalic", fs(16), Graphics.FONT_XTINY);
         }
         return mWmFontB;
     }

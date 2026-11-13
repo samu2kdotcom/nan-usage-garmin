@@ -38,6 +38,19 @@ class NaNUsageGlanceView extends WatchUi.GlanceView {
 
     private var mWordmark;   //!< BitmapResource del wordmark, o null
     private var mIsoMini;    //!< BitmapResource del isotipo mini, o null
+    private var mS = 1.0;    //!< escala = min(w/176, h/93) (caja de glance fr955)
+
+    //! Recalcula la escala desde la caja real de la glance (base 176x93).
+    private function updateScale(dc as Graphics.Dc) as Void {
+        var sx = dc.getWidth() / 176.0;
+        var sy = dc.getHeight() / 93.0;
+        mS = (sx < sy) ? sx : sy;
+    }
+
+    //! Escala un valor de diseño (px a 176x93); identidad exacta con s=1.0.
+    private function sc(v as Lang.Numeric) as Lang.Number {
+        return (v * mS + 0.5).toNumber();
+    }
 
     // --- espaciados del layout (px, relativos al contentArea) ---
     private const PAD = 7;        // padding lateral dentro del contentArea
@@ -95,7 +108,7 @@ class NaNUsageGlanceView extends WatchUi.GlanceView {
 
     //! Texto ajustado al contentArea (fitTextToArea recorta con elipsis).
     private function fitMsg(dc as Graphics.Dc, w as Lang.Number, h as Lang.Number, text as Lang.String) as Lang.String {
-        var fitted = Graphics.fitTextToArea(text, Graphics.FONT_XTINY, w - 16, h - 8, true);
+        var fitted = Graphics.fitTextToArea(text, Graphics.FONT_XTINY, w - sc(16), h - sc(8), true);
         if (fitted == null) {
             return text;
         }
@@ -122,6 +135,7 @@ class NaNUsageGlanceView extends WatchUi.GlanceView {
 
     function onLayout(dc as Graphics.Dc) {
         GlanceView.onLayout(dc);
+        updateScale(dc);
     }
 
     //! Cabecera de marca con niveles de compresión (guard de altura B4: la
@@ -132,27 +146,28 @@ class NaNUsageGlanceView extends WatchUi.GlanceView {
     //! Devuelve la y donde cuelga el contenido (26 / 6 / 5).
     private function drawBrandHeader(dc as Graphics.Dc, w as Lang.Number, level as Lang.Number) as Lang.Number {
         if (level == 2) {
-            return 5;
+            return sc(5);
         }
         if (level == 1) {
             dc.setColor(Graphics.COLOR_DK_GRAY, Graphics.COLOR_TRANSPARENT);
-            dc.drawLine(7, 3, w - 7, 3);
-            return 6;
+            dc.drawLine(sc(7), sc(3), w - sc(7), sc(3));
+            return sc(3) + sc(3);
         }
 
-        var pad = 7;
-        var isoH = 16;
-        var wmH = 15;
+        var pad = sc(PAD);
+        var isoH = sc(16);
+        var wmH = sc(15);
+        var y0 = sc(3);
 
         // Isotipo mini (bitmap oficial cuantizado, fallback con primitivas).
         if (mIsoMini != null) {
-            dc.drawBitmap(pad, 3, mIsoMini);
+            dc.drawBitmap(pad, y0, mIsoMini);
         } else {
             var cxI = pad + isoH / 2;
-            var cyI = 3 + isoH / 2;
+            var cyI = y0 + isoH / 2;
             var q = isoH / 2 - 1;
-            var top = 3;
-            var bot = 3 + isoH - 1;
+            var top = y0;
+            var bot = y0 + isoH - 1;
             var x1 = cxI - q;
             var x2 = cxI + q;
             var edges = [
@@ -170,14 +185,18 @@ class NaNUsageGlanceView extends WatchUi.GlanceView {
                 dc.drawLine(e[0], e[1], e[2], e[3]);
             }
             dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_TRANSPARENT);
-            dc.drawCircle(cxI - 3, cyI, 2);
-            dc.drawCircle(cxI + 3, cyI, 2);
+            var cr = sc(2);
+            if (cr < 1) {
+                cr = 1;
+            }
+            dc.drawCircle(cxI - sc(3), cyI, cr);
+            dc.drawCircle(cxI + sc(3), cyI, cr);
         }
 
         // Wordmark: bitmap blanco 96x15, o texto de sistema como fallback.
-        var wx = pad + isoH + 4;
+        var wx = pad + isoH + sc(4);
         if (mWordmark != null) {
-            dc.drawBitmap(wx, 3 + (isoH - wmH) / 2, mWordmark);
+            dc.drawBitmap(wx, y0 + (isoH - wmH) / 2, mWordmark);
         } else {
             var f = Graphics.FONT_GLANCE;
             if (dc.getTextWidthInPixels("naN.builders", f) > w - pad - wx) {
@@ -186,7 +205,7 @@ class NaNUsageGlanceView extends WatchUi.GlanceView {
             // ty >= 1: el ink del texto nunca arranca a menos de 4 px del
             // borde superior del contentArea (con FONT_GLANCE, 24 px, el
             // centrado puro daría ty = -1 y el ink tocaría y=2).
-            var ty = 3 + (isoH - dc.getFontHeight(f)) / 2;
+            var ty = y0 + (isoH - dc.getFontHeight(f)) / 2;
             if (ty < 1) {
                 ty = 1;
             }
@@ -195,17 +214,18 @@ class NaNUsageGlanceView extends WatchUi.GlanceView {
         }
 
         // Hairline de 1 px en DK_GRAY (una sola línea por vista).
-        var hairY = 3 + isoH + 4;
+        var hairY = y0 + isoH + sc(4);
         dc.setColor(Graphics.COLOR_DK_GRAY, Graphics.COLOR_TRANSPARENT);
         dc.drawLine(pad, hairY, w - pad, hairY);
-        return hairY + 3;
+        return hairY + sc(3);
     }
 
     //! Espejo de drawBrandHeader() para el guard de altura: la y que devolverá
     //! la cabecera por nivel, SIN pintarla (0 -> hairline (3+16+4) + 3 = 26;
     //! 1 -> 3 + 3 = 6; 2 -> 5).
     private function brandTopY(level as Lang.Number) as Lang.Number {
-        return (level == 2) ? 5 : ((level == 1) ? 6 : 26);
+        return (level == 2) ? sc(5)
+            : ((level == 1) ? (sc(3) + sc(3)) : (sc(3) + sc(16) + sc(4) + sc(3)));
     }
 
     //! Edad del último fetch, "HACE 45S" / "HACE 3 MIN" / "HACE 2 H" / "HACE
@@ -251,13 +271,14 @@ class NaNUsageGlanceView extends WatchUi.GlanceView {
             hTxt as Lang.Number, showAge as Lang.Boolean) as Lang.Boolean {
         var need = topY + line1H;
         if (showAge) {
-            need += GAP_ROW + hTxt;
+            need += sc(GAP_ROW) + hTxt;
         }
-        return need + 2 <= h;
+        return need + sc(2) <= h;
     }
 
     function onUpdate(dc as Graphics.Dc) {
         GlanceView.onUpdate(dc);
+        updateScale(dc);
 
         if (dc has :setAntiAlias) {
             dc.setAntiAlias(true);
@@ -281,7 +302,7 @@ class NaNUsageGlanceView extends WatchUi.GlanceView {
         if (!(raw instanceof Lang.Dictionary)) {
             var topY0 = drawBrandHeader(dc, w, 0);
             dc.setColor(Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
-            dc.drawText(w / 2, (topY0 + h - 4) / 2, Graphics.FONT_XTINY,
+            dc.drawText(w / 2, (topY0 + h - sc(4)) / 2, Graphics.FONT_XTINY,
                 fitMsg(dc, w, h - topY0, "abre para sincronizar"),
                 Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
             return;
@@ -297,7 +318,7 @@ class NaNUsageGlanceView extends WatchUi.GlanceView {
         if (allowance == null || used == null || allowance <= 0.0) {
             var topY1 = drawBrandHeader(dc, w, 0);
             dc.setColor(Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
-            dc.drawText(w / 2, (topY1 + h - 4) / 2, Graphics.FONT_XTINY,
+            dc.drawText(w / 2, (topY1 + h - sc(4)) / 2, Graphics.FONT_XTINY,
                 fitMsg(dc, w, h - topY1, "sin datos de créditos"),
                 Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
             return;
@@ -317,7 +338,13 @@ class NaNUsageGlanceView extends WatchUi.GlanceView {
         var num = pct.toString();
         var numW = dc.getTextWidthInPixels(num, fHero);
         var pctW = dc.getTextWidthInPixels("%", fPct);
-        var heroW = numW + GAP_HERO + pctW;
+        var gapHero = sc(GAP_HERO);
+        var gapMin = sc(GAP_MIN);
+        var gapLbl = sc(GAP_LBL);
+        var gapStack = sc(GAP_STACK);
+        var gapRow = sc(GAP_ROW);
+        var pad = sc(PAD);
+        var heroW = numW + gapHero + pctW;
 
         // Bloque derecho: valor "3.0K" en color de severidad (FONT_GLANCE) +
         // etiqueta corta "QUEDAN" (FONT_XTINY). Ambos MEDIDOS; si el valor no
@@ -338,11 +365,11 @@ class NaNUsageGlanceView extends WatchUi.GlanceView {
         // mínimo; si no, apilado (etiqueta sobre valor). En 176 px con "57%"
         // (42) + "QUEDAN" (62) + "3.0K" (38) caben en línea (7+42+3+62+2+38+7
         // = 161 <= 176); con "100%" o valores anchos pasa a apilado.
-        var inline = (PAD + heroW + GAP_MIN + lblW + GAP_LBL + valW + PAD <= w);
+        var inline = (pad + heroW + gapMin + lblW + gapLbl + valW + pad <= w);
 
         // Alto de la línea 1 según el modo.
         var line1H = inline ? ((hHero > hVal) ? hHero : hVal)
-            : (hTxt + GAP_STACK + hVal);
+            : (hTxt + gapStack + hVal);
 
         // --- guard de altura (contentArea 93 px fr955, 63 px en familias
         // menores): orden de sacrificio marca completa -> hairline -> oculta
@@ -375,7 +402,7 @@ class NaNUsageGlanceView extends WatchUi.GlanceView {
             hPct = hHero;
             numW = dc.getTextWidthInPixels(num, fHero);
             pctW = dc.getTextWidthInPixels("%", fPct);
-            heroW = numW + GAP_HERO + pctW;
+            heroW = numW + gapHero + pctW;
             line1H = (hHero > hVal) ? hHero : hVal;
         }
 
@@ -385,20 +412,20 @@ class NaNUsageGlanceView extends WatchUi.GlanceView {
         // --- línea 1, héroe: número blanco + "%" en violeta de marca. Dos
         // drawText: nunca dos colores en una misma llamada. ---
         dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_TRANSPARENT);
-        dc.drawText(PAD, topY, fHero, num, Graphics.TEXT_JUSTIFY_LEFT);
+        dc.drawText(pad, topY, fHero, num, Graphics.TEXT_JUSTIFY_LEFT);
         dc.setColor(Graphics.COLOR_PURPLE, Graphics.COLOR_TRANSPARENT);
-        dc.drawText(PAD + numW + GAP_HERO, topY + ((hHero - hPct) * 0.78).toNumber(),
+        dc.drawText(pad + numW + gapHero, topY + ((hHero - hPct) * 0.78).toNumber(),
             fPct, "%", Graphics.TEXT_JUSTIFY_LEFT);
 
         // --- línea 1, bloque derecho: "QUEDAN 3.0K" (etiqueta LT_GRAY +
         // valor en color de severidad). En línea: valor en línea de base con
         // el héroe y etiqueta a su izquierda, alineada por abajo; apilado:
         // etiqueta encima y valor debajo, ambos anclados a la derecha. ---
-        var xR = w - PAD;
+        var xR = w - pad;
         if (showLbl) {
             if (inline) {
                 dc.setColor(Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
-                dc.drawText(xR - valW - GAP_LBL, topY + line1H - hTxt,
+                dc.drawText(xR - valW - gapLbl, topY + line1H - hTxt,
                     Graphics.FONT_XTINY, "QUEDAN", Graphics.TEXT_JUSTIFY_RIGHT);
                 dc.setColor(valColor, Graphics.COLOR_TRANSPARENT);
                 dc.drawText(xR, topY + line1H - hVal, fVal, valTxt,
@@ -408,7 +435,7 @@ class NaNUsageGlanceView extends WatchUi.GlanceView {
                 dc.drawText(xR, topY, Graphics.FONT_XTINY, "QUEDAN",
                     Graphics.TEXT_JUSTIFY_RIGHT);
                 dc.setColor(valColor, Graphics.COLOR_TRANSPARENT);
-                dc.drawText(xR, topY + hTxt + GAP_STACK, fVal, valTxt,
+                dc.drawText(xR, topY + hTxt + gapStack, fVal, valTxt,
                     Graphics.TEXT_JUSTIFY_RIGHT);
             }
         } else {
@@ -421,7 +448,7 @@ class NaNUsageGlanceView extends WatchUi.GlanceView {
         // anclada a la derecha, con GAP_ROW bajo la línea 1. ---
         if (showAge && ageTxt != null) {
             dc.setColor(Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
-            dc.drawText(xR, topY + line1H + GAP_ROW, Graphics.FONT_XTINY,
+            dc.drawText(xR, topY + line1H + gapRow, Graphics.FONT_XTINY,
                 ageTxt, Graphics.TEXT_JUSTIFY_RIGHT);
         }
     }
