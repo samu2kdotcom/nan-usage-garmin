@@ -58,6 +58,12 @@ using Toybox.Math;
 //! cada fila muestra su crédito y la barra es su % sobre totals.credits, que
 //! cubre la ventana y NO el periodo: no suman el héroe). El badge cuenta los
 //! días hasta period_end (o avisa "CUENTA CONGELADA").
+//!
+//! NAVEGACIÓN (3 pantallas): SELECT refresca (manual), BACK sale y DOWN abre
+//! la pantalla de desglose por modelos (NaNUsageBreakdownView, pushed con su
+//! delegate); el ciclo completo es Principal -> Desglose -> Proyección ->
+//! Principal (UP retrocede; detalles en el delegate del desglose). Esta
+//! pantalla es la "1/3" del indicador discreto bajo el arco.
 class NaNUsageView extends WatchUi.View {
 
     // --- geometría del arco (mockup SVG, sin cambios) ---
@@ -72,6 +78,16 @@ class NaNUsageView extends WatchUi.View {
     private const HAIR_Y = 60;          // hairline 1px bajo el wordmark
     private const HERO_BASE = 133;      // línea base del héroe (glifos hasta aquí)
     private const SUB_Y = 134;          // top del subtítulo
+    // BUG subtítulo (fr955 real, foto): la degradación usaba un techo FIJO de
+    // 250 px sin relación con la geometría y con margen 3 el texto tocaba el
+    // cristal. Ahora el presupuesto es la CUERDA ÚTIL real (subAvailWidth()):
+    // el subtítulo vive DENTRO del hueco del anillo, cuyos lados (r=112,
+    // plumín 10 -> borde interior 107) cruzan la franja del texto, así que el
+    // radio seguro es el del borde INTERIOR del arco menos un aire de 3 px:
+    // rSafe = 112 - 5 - 3 = 104 (>= 10 px al cristal de sobra: 120 - 104 = 16).
+    // Cuerda a la altura del renglón: 2*sqrt(104^2 - 25^2) ~= 201 px.
+    private const SUB_MARGIN = 10;      // px de margen mínimo al borde del círculo
+    private const ARC_CLEAR = 3;        // px de aire entre el texto y el arco
     // BUG 2: el ancho del badge ya NO es fijo (la constante 82 basada en el
     // mockup hacía que "RESET EN 20 D" en FONT_XTINY del fr955 desbordara la
     // caja por la derecha). Se mide el texto y ancho = texto + 2*BADGE_PAD,
@@ -247,6 +263,7 @@ class NaNUsageView extends WatchUi.View {
             mState.frozen() == true);
         drawRows(dc, cx);
         drawIsoMini(dc, cx);
+        drawScreenIndicator(dc, cx);
     }
 
     //! Semáforo por severidad: verde < 50 %, ámbar 50-80 %, rojo > 80 %.
@@ -396,56 +413,143 @@ class NaNUsageView extends WatchUi.View {
             Graphics.TEXT_JUSTIFY_LEFT);
     }
 
-    //! "3.9K de 7.0K créditos · hace 12s" en LT_GRAY (top y=134): créditos
+    //! "4.0K de 7.0K créditos · hace 12s" en LT_GRAY (top y=134): créditos
     //! usados y totales del PERIODO de facturación (bloque "credits" de
     //! /v1/usage), con el helper compacto creditLabel(). Aquí vive también el
     //! aviso de error/caché vieja ("sin conexion · hace 2 h", ámbar).
-    //! Degradación con presupuesto de 250 px (medido en FONT_XTINY): se quita
-    //! primero la palabra "créditos" y AL FINAL la edad; las cifras de
-    //! créditos NUNCA se quitan.
+    //!
+    //! BUG subtítulo (fr955 real, foto): el sufijo "· +N" (modelos fuera del
+    //! top 3) y "· actualizando..." se CONCATENABAN después de elegir el
+    //! formato, así que la cadena final pintada no era ninguna de las medidas
+    //! y el "+9" se salía del círculo. Ahora el SUFIJO se hornea en cada
+    //! candidato y se mide SIEMPRE la cadena final completa antes de pintar.
+    //! Presupuesto: cuerda real subAvailWidth() (radio seguro 120, margen 10).
+    //! Cadena de degradación (medir cada candidato; primero FONT_XTINY y sólo
+    //! se baja de fuente si FONT_TINY midiera menos, que en fr955 no ocurre):
+    //!   1. "4.0K de 7.0K créditos · hace 45 min · +9"   (completo)
+    //!   2. "4.0K de 7.0K · hace 45 min · +9"            (sin "créditos")
+    //!   3. "4.0K/7.0K · 45 min · +9"                    (edad compacta)
+    //!   4. "4.0K/7.0K · 45 min"                         (sacrifica el sufijo)
+    //!   5. "4.0K/7.0K"                                  (sacrifica la edad)
+    //! ORDEN DE SACRIFICIO: primero el sufijo (+N / actualizando...), luego
+    //! la edad; las CIFRAS nunca se sacrifican. Si ni el 5.º cupiera (con la
+    //! cuerda del fr955 es inalcanzable: "4.0K/7.0K" mide ~80 px < 235), se
+    //! baja de fuente ANTES de recortar cifras y como defensa final se
+    //! recorta con ".." para que JAMÁS desborde el círculo.
     private function drawSubtitle(dc as Graphics.Dc, cx as Lang.Number) as Void {
         var uTxt = QuotaStore.creditLabel(mState.used());
         var aTxt = QuotaStore.creditLabel(mState.allowance());
-        var txt;
-        var color = Graphics.COLOR_LT_GRAY;
+        var erring = QuotaStore.getLastErr() != null;
         // B3: el aviso ámbar se decide por el último intento PERSISTIDO
         // (QuotaStore.getLastErr()), no sólo por el error en memoria de esta
         // sesión, para que sobreviva a cerrar y reabrir el widget.
-        if (QuotaStore.getLastErr() != null) {
-            txt = "sin conexion · " + relativeAge();
-            color = Graphics.COLOR_YELLOW;
-        } else {
-            txt = uTxt + " de " + aTxt + " créditos · " + relativeAge();
-            if (dc.getTextWidthInPixels(txt, Graphics.FONT_XTINY) > 250) {
-                txt = uTxt + " de " + aTxt + " · " + relativeAge();
-                if (dc.getTextWidthInPixels(txt, Graphics.FONT_XTINY) > 250) {
-                    txt = uTxt + " de " + aTxt;   // al final: se quita la edad
-                }
-            }
-        }
+        var color = erring ? Graphics.COLOR_YELLOW : Graphics.COLOR_LT_GRAY;
 
-        // El indicador de red es un sufijo sutil en el propio subtítulo,
-        // nunca una pantalla de espera. Si con el sufijo no cabe, se recorta
-        // al dato esencial; las cifras de créditos se conservan.
+        // Sufijo del subtítulo (indicador de red / contador de modelos fuera
+        // del top 3). Va DENTRO de cada candidato: lo que se pinta es lo que
+        // se midió.
+        var suffix = "";
         if (mSyncing) {
-            var withSync = txt + " · actualizando...";
-            if (dc.getTextWidthInPixels(withSync, Graphics.FONT_XTINY) <= 250) {
-                txt = withSync;
-            } else {
-                txt = uTxt + " · " + relativeAge() + " · actualizando...";
-            }
+            suffix = " · actualizando...";
         } else {
             var extra = mState.models().size() - MAX_ROWS;
             if (extra > 0) {
-                var candidate = txt + " · +" + extra;
-                if (dc.getTextWidthInPixels(candidate, Graphics.FONT_XTINY) <= 168) {
-                    txt = candidate;
-                }
+                suffix = " · +" + extra;
             }
         }
 
+        // Edad en sus DOS vestidos: completo (1-2) y compacto (3).
+        var ageL = relativeAge();
+        var ageS = ageShort();
+        var f0 = uTxt + " de " + aTxt + " créditos · " + ageL + suffix;
+        var f1 = uTxt + " de " + aTxt + " · " + ageL + suffix;
+        var f2 = uTxt + "/" + aTxt + " · " + ageS + suffix;
+        var f2s = uTxt + "/" + aTxt + " · " + ageS;      // sin sufijo
+        var f3 = uTxt + "/" + aTxt;                      // sin edad
+        var e0 = "sin conexion · " + ageL + suffix;
+        var e0s = "sin conexion · " + ageL;              // sin sufijo
+        var e1 = "sin conexion" + suffix;
+
+        // Tramo 2 de la cadena ("reduce el tamaño de fuente antes de recortar
+        // cifras" con las dos fuentes proyectadas por el lead): FONT_XTINY es
+        // la más pequeña del fr955 (21 px; FONT_TINY mide 29), así que aquí
+        // el array sólo tiene XTINY y el tramo es no-op; se decide MIDIENDO
+        // la altura, por si el código se porta a otro dispositivo donde
+        // FONT_TINY sea la menor.
+        var fonts = [Graphics.FONT_XTINY];
+        if (dc.getFontHeight(Graphics.FONT_TINY)
+                < dc.getFontHeight(Graphics.FONT_XTINY)) {
+            fonts.add(Graphics.FONT_TINY);
+        }
+
+        // El PRIMERO que quepa en la cuerda REAL, midiendo cada candidato
+        // completo (por cada fuente, la cadena de degradación; el sufijo ya
+        // va horneado, así que lo elegido es exactamente lo que se pinta).
+        var opts = erring ? [e0, e0s, e1, "sin conexion"] : [f0, f1, f2, f2s, f3];
+        var txt = null;
+        var font = fonts[0];
+        for (var fi = 0; fi < fonts.size() && txt == null; fi++) {
+            var availF = subAvailWidth(dc, fonts[fi]);
+            for (var oi = 0; oi < opts.size(); oi++) {
+                if (dc.getTextWidthInPixels(opts[oi], fonts[fi]) <= availF) {
+                    txt = opts[oi];
+                    font = fonts[fi];
+                    break;
+                }
+            }
+        }
+        if (txt == null) {
+            // Defensa final (inalcanzable con la cuerda del fr955, ~235 px):
+            // recorte literal con ".." — nunca desbordar, pase lo que pase.
+            // Con presupuesto <= 0 (geometría degenerada) se dibuja vacío.
+            font = fonts[0];
+            var lastW = subAvailWidth(dc, font);
+            txt = (lastW > 0)
+                ? fitToWidth(dc, erring ? "sin conexion" : f3, font, lastW)
+                : "";
+        }
+
         dc.setColor(color, Graphics.COLOR_TRANSPARENT);
-        dc.drawText(cx, SUB_Y, Graphics.FONT_XTINY, txt, Graphics.TEXT_JUSTIFY_CENTER);
+        dc.drawText(cx, SUB_Y, font, txt, Graphics.TEXT_JUSTIFY_CENTER);
+    }
+
+    //! Cuerda ÚTIL del círculo para el renglón del subtítulo (fr955 redondo
+    //! 260x260, centro (w/2, h/2), franja [SUB_Y, SUB_Y + altura de fuente]).
+    //! Dos restrictores:
+    //!   1. EL CRISTAL: rSafe_cristal = w/2 - SUB_MARGIN (= 120, margen >= 10)
+    //!   2. EL ARCO DE MARCA: sus lados (r = ARC_R = 112, plumín 10 -> borde
+    //!      interior 107) cruzan la franja del subtítulo; el texto debe caber
+    //!      ENTRE ellos: rSafe_arco = ARC_R - ARC_PEN/2 - ARC_CLEAR = 104.
+    //!   rSafe = min(120, 104) = 104; dy = max(|SUB_Y-cy|, |SUB_Y+fontH-cy|)
+    //!   avail = 2 * sqrt(rSafe^2 - dy^2)  = 2*sqrt(104^2 - 25^2) = 201 px
+    //!
+    //! Verificación aritmética con las medidas REALES del simulador fr955
+    //! (getTextWidthInPixels, RobotoCondensed-Bold 21 px): "4.0K de 7.0K
+    //! créditos · hace 45 min · +9" = 241 px ✗; "4.0K de 7.0K · hace 45 min
+    //! · +9" = 222 px — cabría en la cuerda del CRISTAL (235) pero sus
+    //! esquinas (r = sqrt(111^2 + 25^2) = 113.6) chocan con el arco (borde
+    //! interior 107..117 en esa franja: solape verificado en captura). Con
+    //! rSafe = 104 cae al formato corto "4.0K/7.0K · 45 min · +9" = 163 px ✓
+    //! (esquinas a r=86, holgado). Nunca se sacrifican las cifras.
+    private function subAvailWidth(dc as Graphics.Dc, font as Graphics.FontType) as Lang.Number {
+        var cy = dc.getHeight() / 2;
+        var rGlass = dc.getWidth() / 2 - SUB_MARGIN;
+        var rArc = ARC_R - ARC_PEN / 2 - ARC_CLEAR;
+        var rSafe = (rGlass < rArc) ? rGlass : rArc;
+        var dyT = SUB_Y - cy;
+        if (dyT < 0) {
+            dyT = -dyT;
+        }
+        var dyB = SUB_Y + dc.getFontHeight(font) - cy;
+        if (dyB < 0) {
+            dyB = -dyB;
+        }
+        var dy = (dyB > dyT) ? dyB : dyT;
+        if (dy >= rSafe) {
+            return 0;               // franja fuera del radio seguro
+        }
+        var w = (2.0 * Math.sqrt((rSafe * rSafe - dy * dy) * 1.0)).toNumber();
+        return (w > 0) ? w : 0;
     }
 
     //! Badge tipo .btn-primary: rectángulo RELLENO de violeta, esquinas rectas
@@ -531,7 +635,10 @@ class NaNUsageView extends WatchUi.View {
 
         for (var i = 0; i < MAX_ROWS && i < models.size(); i++) {
             var m = models[i] as ModelCredit;
-            if (m == null) {
+            // Modelo sin créditos o gratuito (credits <= 0): sin cifra no hay
+            // fila en la vista principal (QuotaStore ya los filtra; guard
+            // defensivo por si una lista llegara sin pasar por el filtro).
+            if (m == null || m.credits() == null || m.credits() <= 0.0) {
                 continue;
             }
             var f = m.windowFraction(mState.windowTotal());
@@ -542,7 +649,9 @@ class NaNUsageView extends WatchUi.View {
             var barY = baseY + 5;                   // 197 / 214 / 231
 
             var creditW = dc.getTextWidthInPixels(creditTxt, Graphics.FONT_XTINY);
-            var name = fitName(dc, upperAscii(m.shortName()),
+            // Etiqueta corta ÚNICA ya en MAYÚSCULAS (QuotaStore.assignLabels:
+            // "glm5.3" y "glm5.3-flash" -> "GLM5.3" y "GLM5.3-F").
+            var name = fitName(dc, m.label(),
                 right - creditW - 6 - left);
 
             dc.setColor(Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
@@ -563,6 +672,17 @@ class NaNUsageView extends WatchUi.View {
                 dc.fillRectangle(left, barY, fillW, BAR_H);
             }
         }
+    }
+
+    //! Indicador DISCRETO de pantalla "1/3" (navegación de 3 pantallas):
+    //! a la derecha del isotipo mini (que ocupa cx±8), en la banda del hueco
+    //! del arco. Con "1/3" de ~26 px: ink 140..166 x 238..251 -> esquina
+    //! (166, 251): dx=36, dy=121 -> r=127.7 < 130 (2 px al cristal) y sin
+    //! tocar la barra de la fila 3 (231..233) ni el isotipo (borde cx+8).
+    private function drawScreenIndicator(dc as Graphics.Dc, cx as Lang.Number) as Void {
+        dc.setColor(Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
+        dc.drawText(cx + ISO_SIZE / 2 + 2, ISO_Y - 2, Graphics.FONT_XTINY,
+            "1/3", Graphics.TEXT_JUSTIFY_LEFT);
     }
 
     //! Isotipo mini (16x16) centrado en el hueco del arco, bajo la última fila:
@@ -604,32 +724,24 @@ class NaNUsageView extends WatchUi.View {
 
     //! Mayúsculas ASCII: Lang.String no tiene toUpperCase() en el SDK 9.3.0.
     //! Los nombres de modelo son ASCII, así que basta una tabla con find().
-    private function upperAscii(s as Lang.String) as Lang.String {
-        if (s == null) {
-            return s;
-        }
-        var lower = "abcdefghijklmnopqrstuvwxyz";
-        var upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-        var out = "";
-        for (var i = 0; i < s.length(); i++) {
-            var ch = s.substring(i, i + 1);
-            if (ch == null) {
-                break;
-            }
-            var idx = lower.find(ch);
-            out += (idx == null || idx < 0) ? ch : upper.substring(idx, idx + 1);
-        }
-        return out;
+    //! (Movida a QuotaStore.upperAscii: es la ÚNICA copia y la usan las
+    //! etiquetas de assignLabels.)
+
+    //! Recorta el nombre con ".." si no cabe en maxW píxeles (FONT_XTINY).
+    private function fitName(dc as Graphics.Dc, name as Lang.String, maxW as Lang.Number) as Lang.String {
+        return fitToWidth(dc, name, Graphics.FONT_XTINY, maxW);
     }
 
-    //! Recorta el nombre con ".." si no cabe en maxW píxeles.
-    private function fitName(dc as Graphics.Dc, name as Lang.String, maxW as Lang.Number) as Lang.String {
-        if (maxW <= 0 || dc.getTextWidthInPixels(name, Graphics.FONT_XTINY) <= maxW) {
-            return name;
+    //! Recorta `txt` con ".." si no cabe en maxW píxeles con la fuente dada.
+    //! Gemela de fitName pero paramétrica: la usa el recorte de DEFENSA FINAL
+    //! del subtítulo (defensa para que el círculo jamás se desborde).
+    private function fitToWidth(dc as Graphics.Dc, txt as Lang.String, font as Graphics.FontType, maxW as Lang.Number) as Lang.String {
+        if (maxW <= 0 || dc.getTextWidthInPixels(txt, font) <= maxW) {
+            return txt;
         }
-        var cut = name;
+        var cut = txt;
         while (cut.length() > 1
-            && dc.getTextWidthInPixels(cut + "..", Graphics.FONT_XTINY) > maxW) {
+            && dc.getTextWidthInPixels(cut + "..", font) > maxW) {
             var shorter = cut.substring(0, cut.length() - 1);
             if (shorter == null) {
                 break;
@@ -639,9 +751,34 @@ class NaNUsageView extends WatchUi.View {
         return cut + "..";
     }
 
+    //! Estado vacío / error / aviso de conexión (con cabecera de marca)
     // -------------------------------------------------------------------------
-    // Estado vacío / error / aviso de conexión (con cabecera de marca)
-    // -------------------------------------------------------------------------
+    //! Cuerda ÚTIL del cristal para una franja de texto [yTop, yTop+bandH],
+    //! gemela de subAvailWidth() pero SIN el restrictor del arco (el estado
+    //! vacío no dibuja anillo): rSafe = w/2 - SUB_MARGIN.
+    //! FIX desborde (verificación con métricas reales del fr955): mError es
+    //! una cadena libre y "Respuesta inesperada" mide 237 px en FONT_SMALL ->
+    //! esquinas a r=123.3, fuera del margen de diseño (120). El msg y el hint
+    //! se MIDEN ahora contra la cuerda y degradan antes de dibujarse.
+    private function chordAvail(dc as Graphics.Dc, yTop as Lang.Number, bandH as Lang.Number) as Lang.Number {
+        var cy = dc.getHeight() / 2;
+        var rSafe = dc.getWidth() / 2 - SUB_MARGIN;
+        var dyT = yTop - cy;
+        if (dyT < 0) {
+            dyT = -dyT;
+        }
+        var dyB = yTop + bandH - cy;
+        if (dyB < 0) {
+            dyB = -dyB;
+        }
+        var dy = (dyB > dyT) ? dyB : dyT;
+        if (dy >= rSafe) {
+            return 0;               // franja fuera del radio seguro
+        }
+        var w = (2.0 * Math.sqrt((rSafe * rSafe - dy * dy) * 1.0)).toNumber();
+        return (w > 0) ? w : 0;
+    }
+
     private function drawEmptyState(dc as Graphics.Dc, cx as Lang.Number, cy as Lang.Number) as Void {
         drawHeader(dc, cx);
 
@@ -654,32 +791,108 @@ class NaNUsageView extends WatchUi.View {
             msg = mSyncing ? "Sincronizando..." : "Sin datos";
         }
 
+        // Msg medido contra la cuerda real: primero FONT_SMALL; si no cabe,
+        // FONT_XTINY; defensa final, recorte con ".." (nunca fuera del
+        // círculo; "Respuesta inesperada" cae a XTINY: 156 px < 229).
+        var fMsg = Graphics.FONT_SMALL;
+        var hMsg = dc.getFontHeight(fMsg);
+        var yMsg = cy - hMsg / 2;
+        var avail = chordAvail(dc, yMsg, hMsg);
+        if (dc.getTextWidthInPixels(msg, fMsg) > avail) {
+            fMsg = Graphics.FONT_XTINY;
+            hMsg = dc.getFontHeight(fMsg);
+            yMsg = cy - hMsg / 2;
+            avail = chordAvail(dc, yMsg, hMsg);
+        }
+        if (dc.getTextWidthInPixels(msg, fMsg) > avail) {
+            msg = fitToWidth(dc, msg, fMsg, avail);
+        }
+
         dc.setColor(color, Graphics.COLOR_TRANSPARENT);
-        dc.drawText(cx, cy, Graphics.FONT_SMALL, msg,
+        dc.drawText(cx, yMsg, fMsg, msg,
             Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
 
+        // Hint medido también (212 px se salaban del margen de diseño):
+        // escalera "pulsa SELECT para reintentar" -> "SELECT para reintentar"
+        // -> recorte con ".."; "esperando al movil" (137) siempre cabe.
         var hint = mSyncing ? "esperando al movil" : "pulsa SELECT para reintentar";
+        var fHint = Graphics.FONT_XTINY;
+        var yHint = cy + 36;
+        var availH = chordAvail(dc, yHint, dc.getFontHeight(fHint));
+        if (dc.getTextWidthInPixels(hint, fHint) > availH) {
+            hint = "SELECT para reintentar";
+        }
+        if (dc.getTextWidthInPixels(hint, fHint) > availH) {
+            hint = fitToWidth(dc, hint, fHint, availH);
+        }
         dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_TRANSPARENT);
-        dc.drawText(cx, cy + 36, Graphics.FONT_XTINY, hint,
+        dc.drawText(cx, yHint, fHint, hint,
             Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
     }
 
-    //! "hace 45s" / "hace 3 min" / "hace 2 h" / "hace 5 d" a partir del epoch
-    //! de PARED del último fetch (B1: Time.now().value(), sobrevive a reboots;
-    //! antes System.getTimer() colapsaba todo < 60 s en "hace un momento").
-    function relativeAge() as Lang.String {
+    //! Segundos desde el último fetch CON ÉXITO. Devuelve:
+    //!   null -> nunca se ha traído nada (sin datos)
+    //!   -1   -> diff < 0: el reloj cambió/reboot y la edad es desconocida (B1)
+    private function ageSeconds() as Lang.Number or Null {
         var last = QuotaStore.getLastFetchEpoch();
         if (last == null || last == 0) {
-            return "sin datos";
+            return null;
         }
         var diff = QuotaStore.nowEpoch() - last;
         if (diff < 0) {
-            return "hace ?";   // reloj cambiado/reboot: edad desconocida (B1)
+            return -1;
         }
-        if (diff < 60) {
-            return "hace " + diff + "s";
+        return diff;
+    }
+
+    //! Edad COMPACTA para los formatos estrechos del subtítulo: "ahora"
+    //! (< 5 s, en vez del "hace 0s" del bug), "12s", "3 min", "2 h", "5 d";
+    //! "sin datos" y "?" para los casos B0/B1. La pareja ageShort()/la forma
+    //! con "hace " de relativeAge() comparte el cálculo de ageSeconds().
+    private function ageShort() as Lang.String {
+        var s = ageSeconds();
+        if (s == null) {
+            return "sin datos";
         }
-        var mins = diff / 60;
+        if (s < 0) {
+            return "?";
+        }
+        if (s < 5) {
+            return "ahora";
+        }
+        if (s < 60) {
+            return s + "s";
+        }
+        var mins = s / 60;
+        if (mins < 60) {
+            return mins + " min";
+        }
+        var hours = mins / 60;
+        if (hours < 24) {
+            return hours + " h";
+        }
+        return (hours / 24) + " d";
+    }
+
+    //! "ahora" / "hace 45s" / "hace 3 min" / "hace 2 h" / "hace 5 d" a partir
+    //! del epoch de PARED del último fetch (B1: Time.now().value(), sobrevive
+    //! a reboots; antes System.getTimer() colapsaba todo < 60 s en "hace un
+    //! momento"). BUG edad "hace 0s": menos de 5 s muestra "ahora".
+    function relativeAge() as Lang.String {
+        var s = ageSeconds();
+        if (s == null) {
+            return "sin datos";
+        }
+        if (s < 0) {
+            return "hace ?";
+        }
+        if (s < 5) {
+            return "ahora";
+        }
+        if (s < 60) {
+            return "hace " + s + "s";
+        }
+        var mins = s / 60;
         if (mins < 60) {
             return "hace " + mins + " min";
         }
@@ -738,11 +951,31 @@ class NaNUsageView extends WatchUi.View {
     }
 }
 
-//! Input: select = manual refresh, back = exit.
+//! Input: select = manual refresh, back = exit, DOWN = pantalla de desglose.
 class NaNUsageDelegate extends WatchUi.BehaviorDelegate {
 
     function initialize() {
         BehaviorDelegate.initialize();
+    }
+
+    //! DOWN abre la PANTALLA 2/3 (desglose por modelos) como vista PUSHED con
+    //! su PROPIO delegate (NaNUsageBreakdownDelegate): mientras el desglose
+    //! está encima, recibe él la entrada (DOWN/UP pagan y pasan a la pantalla
+    //! 3/3, Proyección; BACK vuelve aquí); al hacer BACK el control vuelve a
+    //! esta vista sin tocar el manejo de SELECT/BACK de la principal.
+    //! Mapeo de teclas del fr955 (simulator.json): down -> nextPage. UP en la
+    //! principal no tiene pantalla anterior: no se overridea (no-op).
+    function onNextPage() as Lang.Boolean {
+        // Guard anti doble-push (pulsaciones rápidas de DOWN apilarían dos
+        // desgloses): si la vista de arriba ya es el desglose, no se apila.
+        var views = WatchUi.getCurrentView();
+        if (views != null && views.size() > 0
+                && (views[0] instanceof NaNUsageBreakdownView)) {
+            return true;
+        }
+        WatchUi.pushView(new NaNUsageBreakdownView(), new NaNUsageBreakdownDelegate(),
+            WatchUi.SLIDE_IMMEDIATE);
+        return true;
     }
 
     function onSelect() {

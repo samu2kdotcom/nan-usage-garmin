@@ -9,23 +9,41 @@ using Toybox.Time;
 //! (totals.by_model de GET /v1/usage?limit=1). Ya no hay topes de tokens:
 //! la cuenta de NaN va por CRÉDITOS, y este desglose cubre la ventana
 //! (start_date..end_date del reporte), no el periodo de facturación.
+//!
+//! Desglose por modelos (NaNUsageBreakdownView): lista SOLO los modelos con
+//! créditos > 0 (los gratuitos cuentan en los totales pero no se listan,
+//! filterBilled()). Cada fila muestra su etiqueta única (assignLabels), su
+//! crédito y sus TOKENS (total_tokens); api_requests/cached_tokens viajan
+//! crudos para los totales de la ventana. Pueden ser null (cachés del
+//! formato anterior o payload sin esas claves) y el display usa "—".
 class ModelCredit {
 
     var mModel;      //!< p.ej. "glm5.3"
     var mCredits;    //!< Float: créditos consumidos por el modelo en la ventana
+    var mTokens;     //!< Number/Long: total_tokens del modelo, o null si falta
+    var mRequests;   //!< Number/Long: api_requests del modelo, o null si falta
+    var mCached;     //!< Number/Long: cached_tokens del modelo, o null si falta
+    var mLabel;      //!< etiqueta corta ÚNICA de la lista (assignLabels)
 
-    function initialize(model, credits) {
+    function initialize(model, credits, tokens, requests, cached) {
         mModel = model;
         mCredits = credits;
+        mTokens = tokens;
+        mRequests = requests;
+        mCached = cached;
     }
 
     function model() { return mModel; }
     function credits() { return mCredits; }
+    function tokens() { return mTokens; }
+    function apiRequests() { return mRequests; }
+    function cachedTokens() { return mCached; }
 
     //! Crédito de este modelo como fracción del TOTAL de la ventana
     //! (totals.credits, p.ej. 3884.6), NUNCA del allowance del periodo de
     //! facturación (7000): así las filas no pueden parecer que suman el héroe.
-    function windowFraction(windowTotal as Lang.Float) as Lang.Float {
+    //! Tolerante a null (modelo sin cifra en la caché/API): 0.0.
+    function windowFraction(windowTotal as Lang.Float or Null) as Lang.Float {
         if (windowTotal == null || windowTotal <= 0.0 || mCredits == null) {
             return 0.0;
         }
@@ -35,13 +53,19 @@ class ModelCredit {
         return f;
     }
 
-    //! Short display name: drops everything after "-".
-    function shortName() {
-        var idx = mModel.find("-");
-        if (idx != null && idx > 0) {
-            return mModel.substring(0, idx);
+    //! Etiqueta CORTA y ÚNICA de la lista (p.ej. "GLM5.3-F"); la calcula
+    //! QuotaStore.assignLabels() sobre la lista COMPLETA (desambiguación de
+    //! prefijos repetidos) y viaja con el objeto. Fallback defensivo: el
+    //! nombre crudo del modelo si por algún motivo no tuviera etiqueta.
+    function label() {
+        if (mLabel == null || mLabel.equals("")) {
+            return mModel;
         }
-        return mModel;
+        return mLabel;
+    }
+
+    function setLabel(l as Lang.String) as Void {
+        mLabel = l;
     }
 }
 
@@ -58,9 +82,16 @@ class CreditState {
     var mFrozen;       //!< Boolean: cuenta congelada -> aviso en vez del badge
     var mPeriodDay;    //!< Number: día civil (días desde epoch) de period_end
     var mWindowTotal;  //!< Float or null: totals.credits (ventana de 30 días)
-    var mModels;       //!< Array<ModelCredit> pre-ordenado por créditos desc
+    var mModels;       //!< Array<ModelCredit> filtrado (créditos > 0),
+                       //!< pre-ordenado por créditos desc y CON etiquetas
+    var mPeriodStart;  //!< Number or null: epoch (s) del inicio del periodo
+                       //!< (period_start a las 00:00 UTC); null en cachés viejas
+    var mTotTokens;    //!< Number/Long or null: total_tokens de la ventana
+    var mTotRequests;  //!< Number/Long or null: api_requests de la ventana
+    var mTotCached;    //!< Number/Long or null: cached_tokens de la ventana
 
-    function initialize(allowance, used, remaining, frozen, periodDay, windowTotal, models) {
+    function initialize(allowance, used, remaining, frozen, periodDay,
+            windowTotal, models, periodStart, totTokens, totRequests, totCached) {
         mAllowance = allowance;
         mUsed = used;
         mRemaining = remaining;
@@ -68,6 +99,10 @@ class CreditState {
         mPeriodDay = periodDay;
         mWindowTotal = windowTotal;
         mModels = models;
+        mPeriodStart = periodStart;
+        mTotTokens = totTokens;
+        mTotRequests = totRequests;
+        mTotCached = totCached;
     }
 
     //! Fracción del allowance ya consumida (héroe, arco y semáforo), 0..1.
@@ -88,6 +123,10 @@ class CreditState {
     function periodDay() { return mPeriodDay; }
     function windowTotal() { return mWindowTotal; }
     function models() { return mModels; }
+    function periodStart() { return mPeriodStart; }
+    function totTokens() { return mTotTokens; }
+    function totRequests() { return mTotRequests; }
+    function totCached() { return mTotCached; }
 }
 
 
@@ -151,6 +190,215 @@ class QuotaStore {
         return (tenths / 10) + "." + (tenths % 10) + "K";
     }
 
+    //! Formato compacto de CONTEOS (tokens y peticiones): < 1000 entero;
+    //! después una decimal con K/M/B y SIN ".0" (156.0M -> "156M",
+    //! 2.1M -> "2.1M"). 156000000 -> "156M", 1234567 -> "1.2M". Null o no
+    //! numérico -> "—" (manejo de dato ausente).
+    public static function tokenLabel(v) as Lang.String {
+        if (!QuotaStore.isNumeric(v)) {
+            return "—";
+        }
+        var f = v * 1.0;
+        if (f < 0.0) {
+            f = 0.0;
+        }
+        if (f < 1000.0) {
+            return (f + 0.5).toNumber().toString();
+        }
+        var suffix;
+        var tenths;
+        if (f < 1000000.0) {
+            suffix = "K";
+            tenths = (f / 100.0 + 0.5).toNumber();
+        } else if (f < 1000000000.0) {
+            suffix = "M";
+            tenths = (f / 100000.0 + 0.5).toNumber();
+        } else {
+            suffix = "B";
+            tenths = (f / 100000000.0 + 0.5).toNumber();
+        }
+        if (tenths % 10 == 0) {
+            return (tenths / 10) + suffix;
+        }
+        return (tenths / 10) + "." + (tenths % 10) + suffix;
+    }
+
+    //! true si `v` es un valor numérico del parser JSON/Storage (Number int32,
+    //! Long int64, Float o Double); false en null, String, Boolean, etc.
+    public static function isNumeric(v) as Lang.Boolean {
+        if (v == null) {
+            return false;
+        }
+        return v instanceof Lang.Float || v instanceof Lang.Double
+            || v instanceof Lang.Number || v instanceof Lang.Long;
+    }
+
+    //! Mayúsculas ASCII: Lang.String.toUpperCase() no está disponible en el
+    //! SDK 9.3.0 del fr955 (los nombres de modelo son ASCII, basta una tabla
+    //! con find()). ÚNICA copia: las vistas usan las etiquetas de assignLabels.
+    public static function upperAscii(s as Lang.String) as Lang.String {
+        if (s == null) {
+            return s;
+        }
+        var lower = "abcdefghijklmnopqrstuvwxyz";
+        var upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        var out = "";
+        for (var i = 0; i < s.length(); i++) {
+            var ch = s.substring(i, i + 1);
+            if (ch == null) {
+                break;
+            }
+            var idx = lower.find(ch);
+            out += (idx == null || idx < 0) ? ch : upper.substring(idx, idx + 1);
+        }
+        return out;
+    }
+
+    //! Base de una abreviatura: lo anterior al primer "-" ("glm5.3-flash" ->
+    //! "glm5.3") o el nombre completo si no lleva guion ("glm5.3").
+    private static function baseName(model as Lang.String) as Lang.String {
+        if (model == null) {
+            return "";
+        }
+        var idx = model.find("-");
+        if (idx != null && idx > 0) {
+            return model.substring(0, idx);
+        }
+        return model;
+    }
+
+    //! Discriminador del sufijo para bases repetidas: "-F"/"-M"/"-P" derivado
+    //! de flash/max/pro, o las 2-3 primeras letras del sufijo ("-V4" para
+    //! "deepseek-v4"); "" si el modelo no lleva sufijo (el base pelado se
+    //! queda SIN discriminador, p.ej. "glm5.3" junto a "glm5.3-flash").
+    private static function suffixDisc(model as Lang.String) as Lang.String {
+        var idx = model.find("-");
+        if (idx == null || idx < 0 || idx + 1 >= model.length()) {
+            return "";
+        }
+        var suffix = model.substring(idx + 1, model.length());
+        var dash = suffix.find("-");
+        var seg = (dash == null || dash < 0) ? suffix : suffix.substring(0, dash);
+        if (seg.equals("flash")) {
+            return "-F";
+        }
+        if (seg.equals("max")) {
+            return "-M";
+        }
+        if (seg.equals("pro")) {
+            return "-P";
+        }
+        if (seg.length() > 0) {
+            var take = (seg.length() < 3) ? seg.length() : 3;
+            return "-" + QuotaStore.upperAscii(seg.substring(0, take));
+        }
+        return "";
+    }
+
+    //! Alarga la etiqueta de `m` con letras del sufijo completo hasta dejar de
+    //! coincidir con `avoid` (paso anti-colisión de assignLabels). El pase
+    //! numérico final del llamador garantiza el término si esto no bastara.
+    private static function widenLabel(m as ModelCredit, avoid as Lang.String) as Lang.String {
+        var model = m.model();
+        var base = QuotaStore.upperAscii(QuotaStore.baseName(model));
+        var idx = model.find("-");
+        if (idx == null || idx < 0 || idx + 1 >= model.length()) {
+            return base;                    // sin sufijo: numérico en el llamador
+        }
+        var suffix = model.substring(idx + 1, model.length());
+        for (var k = 1; k <= suffix.length(); k++) {
+            var cand = base + "-" + QuotaStore.upperAscii(suffix.substring(0, k));
+            if (!cand.equals(avoid)) {
+                return cand;
+            }
+        }
+        return base + "-" + QuotaStore.upperAscii(suffix);
+    }
+
+    //! Asigna a cada ModelCredit de la lista una etiqueta corta (MAYÚSCULAS)
+    //! y ÚNICA: base pelado cuando el prefijo no se repite ("deepseek" ->
+    //! "DEEPSEEK"); con discriminador cuando sí ("glm5.3" -> "GLM5.3" y
+    //! "glm5.3-flash" -> "GLM5.3-F"). Garantía: NUNCA dos etiquetas iguales
+    //! en la misma lista (pase anti-colisión + fallback numérico).
+    public static function assignLabels(models as Lang.Array) as Void {
+        var n = models.size();
+        if (n == 0) {
+            return;
+        }
+        var bases = [];
+        var labels = [];
+        for (var i = 0; i < n; i++) {
+            var m0 = models[i] as ModelCredit;
+            bases.add((m0 == null) ? "" : QuotaStore.baseName(m0.model()));
+            labels.add("");
+        }
+        for (var i = 0; i < n; i++) {
+            var m = models[i] as ModelCredit;
+            if (m == null || bases[i].equals("")) {
+                continue;
+            }
+            var dup = false;
+            for (var j = 0; j < n; j++) {
+                if (j != i && bases[j].equals(bases[i])) {
+                    dup = true;
+                    break;
+                }
+            }
+            var lb = QuotaStore.upperAscii(bases[i]);
+            if (dup) {
+                lb += QuotaStore.suffixDisc(m.model());
+            }
+            labels[i] = lb;
+        }
+        // Pase anti-colisión: si quedan dos etiquetas iguales, la segunda se
+        // alarga con letras del sufijo; si ni así, se numera.
+        var guard = 0;
+        var changed = true;
+        while (changed && guard < 8) {
+            changed = false;
+            guard++;
+            for (var i = 0; i < n; i++) {
+                for (var j = i + 1; j < n; j++) {
+                    if (labels[i].equals(labels[j]) && !labels[i].equals("")) {
+                        var w = QuotaStore.widenLabel(models[j] as ModelCredit,
+                            labels[j]);
+                        if (w.equals(labels[j])) {
+                            w = labels[j] + "-" + (j + 1);
+                        }
+                        labels[j] = w;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        for (var i = 0; i < n; i++) {
+            var m = models[i] as ModelCredit;
+            if (m != null) {
+                m.setLabel(labels[i]);
+            }
+        }
+    }
+
+    //! Quita de la lista los modelos SIN consumo (credits == null o <= 0:
+    //! planes gratuitos). Se siguen usando para los TOTALES (que vienen del
+    //! bloque "totals" de la API o se sumaron antes de filtrar), sólo dejan
+    //! de LISTARSE. Devuelve un array nuevo; la entrada no se toca.
+    public static function filterBilled(models as Lang.Array) as Lang.Array {
+        var out = [];
+        for (var i = 0; i < models.size(); i++) {
+            var m = models[i] as ModelCredit;
+            if (m == null) {
+                continue;
+            }
+            var c = m.credits();
+            if (c == null || c <= 0.0) {
+                continue;
+            }
+            out.add(m);
+        }
+        return out;
+    }
+
     //! Reads the cached snapshot; returns a CreditState or null.
     public static function getCachedState() as CreditState or Null {
         var raw = Application.Storage.getValue(QuotaStore.CREDITS_KEY);
@@ -174,10 +422,15 @@ class QuotaStore {
                 var e = eV as Lang.Dictionary;
                 var name = e.get("n") as Lang.String;
                 var credits = QuotaStore.asFloat(e.get("c"));
-                if (name == null || credits == null) {
+                // Compatibilidad de arranque: una caché ANTERIOR (o una
+                // entrada sin "tk"/"rq"/"ca") no debe romper nada: los campos
+                // extra llegan null y el desglose pinta "—" en lo que falte.
+                // El nombre es lo único imprescindible para listar el modelo.
+                if (name == null) {
                     continue;
                 }
-                models.add(new ModelCredit(name, credits));
+                models.add(new ModelCredit(name, credits,
+                    e.get("tk"), e.get("rq"), e.get("ca")));
             }
         }
         var frozenV = d.get("f");
@@ -185,8 +438,64 @@ class QuotaStore {
         if (frozenV instanceof Lang.Boolean) {
             frozen = frozenV as Lang.Boolean;
         }
+
+        // period_start en epoch (s); las cachés viejas no lo traen -> null y
+        // la pantalla de PROYECCIÓN estima el ritmo con 30 días (~).
+        var periodStart = null;
+        if (QuotaStore.isNumeric(d.get("ps"))) {
+            periodStart = d.get("ps");
+        }
+
+        // Totales de la ventana (tokens/peticiones/caché): claves "tt"/"ar"/
+        // "ct". CACHÉS VIEJAS sin ellas: se suman las entradas tk/rq/ca de
+        // TODOS los modelos ANTES de filtrar los gratuitos (cuentan igual).
+        var totTokens = QuotaStore.isNumeric(d.get("tt")) ? d.get("tt") : null;
+        var totRequests = QuotaStore.isNumeric(d.get("ar")) ? d.get("ar") : null;
+        var totCached = QuotaStore.isNumeric(d.get("ct")) ? d.get("ct") : null;
+        if (totTokens == null || totRequests == null || totCached == null) {
+            var sT = 0;
+            var sR = 0;
+            var sC = 0;
+            var anyT = false;
+            var anyR = false;
+            var anyC = false;
+            for (var i = 0; i < models.size(); i++) {
+                var sm = models[i] as ModelCredit;
+                if (sm == null) {
+                    continue;
+                }
+                if (sm.tokens() != null) {
+                    sT += sm.tokens();
+                    anyT = true;
+                }
+                if (sm.apiRequests() != null) {
+                    sR += sm.apiRequests();
+                    anyR = true;
+                }
+                if (sm.cachedTokens() != null) {
+                    sC += sm.cachedTokens();
+                    anyC = true;
+                }
+            }
+            if (totTokens == null && anyT) {
+                totTokens = sT;
+            }
+            if (totRequests == null && anyR) {
+                totRequests = sR;
+            }
+            if (totCached == null && anyC) {
+                totCached = sC;
+            }
+        }
+
+        // Filtrado de modelos sin consumo + etiquetas únicas (la lista que
+        // viaja en el estado ya NO contiene gratuitos ni duplicados visuales).
+        models = QuotaStore.filterBilled(models);
+        QuotaStore.assignLabels(models);
+
         return new CreditState(allowance, used, QuotaStore.asFloat(d.get("r")),
-            frozen, d.get("d"), QuotaStore.asFloat(d.get("t")), models);
+            frozen, d.get("d"), QuotaStore.asFloat(d.get("t")), models,
+            periodStart, totTokens, totRequests, totCached);
     }
 
     //! Epoch de pared (segundos UNIX) AHORA. B1: System.getTimer() es ms desde
@@ -323,12 +632,36 @@ class QuotaStore {
             periodDay = QuotaStore.parseIsoDay(pe);
         }
 
+        // period_start -> epoch (s) a las 00:00 UTC del día (precisión de
+        // día, la que usa el cálculo del ritmo). Se guarda en la caché junto
+        // a period_end para la pantalla de PROYECCIÓN.
+        var periodStart = null;
+        var ps = cr.get("period_start") as Lang.String;
+        if (ps != null) {
+            var psDay = QuotaStore.parseIsoDay(ps);
+            if (psDay != null) {
+                periodStart = psDay * 86400;
+            }
+        }
+
         var windowTotal = null;
+        var totTokens = null;
+        var totRequests = null;
+        var totCached = null;
         var models = [];
         var toV = data.get("totals");
         if (toV instanceof Lang.Dictionary) {
             var to = toV as Lang.Dictionary;
             windowTotal = QuotaStore.asFloat(to.get("credits"));
+            // Conteos de la ventana si el bloque "totals" los trae; si no,
+            // abajo se suman desde by_model (incluye los modelos gratuitos:
+            // el saldo se calcula ANTES de filtrar los modelos sin créditos).
+            totTokens = QuotaStore.isNumeric(to.get("total_tokens"))
+                ? to.get("total_tokens") : null;
+            totRequests = QuotaStore.isNumeric(to.get("api_requests"))
+                ? to.get("api_requests") : null;
+            totCached = QuotaStore.isNumeric(to.get("cached_tokens"))
+                ? to.get("cached_tokens") : null;
             var list = to.get("by_model");
             if (list instanceof Lang.Array) {
                 for (var i = 0; i < list.size(); i++) {
@@ -339,17 +672,63 @@ class QuotaStore {
                     var e = eV as Lang.Dictionary;
                     var name = e.get("model") as Lang.String;
                     var credits = QuotaStore.asFloat(e.get("credits"));
-                    if (name == null || credits == null) {
+                    if (name == null) {
                         continue;
                     }
-                    models.add(new ModelCredit(name, credits));
+                    // total_tokens / api_requests / cached_tokens crudos
+                    // (Number o Long de 64); se conservan tal cual y pueden
+                    // ser null si la API los omite.
+                    models.add(new ModelCredit(name, credits,
+                        e.get("total_tokens"), e.get("api_requests"),
+                        e.get("cached_tokens")));
                 }
             }
         }
+        if (totTokens == null || totRequests == null || totCached == null) {
+            var sT = 0;
+            var sR = 0;
+            var sC = 0;
+            var anyT = false;
+            var anyR = false;
+            var anyC = false;
+            for (var i = 0; i < models.size(); i++) {
+                var sm = models[i] as ModelCredit;
+                if (sm == null) {
+                    continue;
+                }
+                if (sm.tokens() != null) {
+                    sT += sm.tokens();
+                    anyT = true;
+                }
+                if (sm.apiRequests() != null) {
+                    sR += sm.apiRequests();
+                    anyR = true;
+                }
+                if (sm.cachedTokens() != null) {
+                    sC += sm.cachedTokens();
+                    anyC = true;
+                }
+            }
+            if (totTokens == null && anyT) {
+                totTokens = sT;
+            }
+            if (totRequests == null && anyR) {
+                totRequests = sR;
+            }
+            if (totCached == null && anyC) {
+                totCached = sC;
+            }
+        }
 
+        // Orden por créditos desc -> filtrado de modelos sin consumo (los
+        // gratuitos NO se listan) -> etiquetas únicas por lista.
         QuotaStore.sortModelsDesc(models);
+        models = QuotaStore.filterBilled(models);
+        QuotaStore.assignLabels(models);
+
         return new CreditState(allowance, used, remaining, frozen, periodDay,
-            windowTotal, models);
+            windowTotal, models, periodStart, totTokens, totRequests,
+            totCached);
     }
 
     //! Selección directa por créditos DESC (la API manda "by_model" ordenado
@@ -365,7 +744,17 @@ class QuotaStore {
                 if (a == null || b == null) {
                     continue;
                 }
-                if (b.credits() > a.credits()) {
+                // Modelo sin créditos (null) = 0.0 para no romper la
+                // comparación numérica con valores Long/Float mixtos.
+                var ca = a.credits();
+                var cb = b.credits();
+                if (ca == null) {
+                    ca = 0.0;
+                }
+                if (cb == null) {
+                    cb = 0.0;
+                }
+                if (cb > ca) {
                     best = j;
                 }
             }
@@ -378,7 +767,13 @@ class QuotaStore {
     }
 
     //! Compact serialisation for Application Storage. Float/Boolean/Array/
-    //! Dictionary son almacenables; "m" va pre-ordenado por créditos desc.
+    //! Dictionary son almacenables; "m" va pre-ordenado por créditos desc,
+    //! FILTRADO (sin modelos de 0 créditos) y con etiquetas ya asignadas.
+    //! Por entrada: "n" nombre, "c" créditos y (si la API los trajo, si no
+    //! la clave NO existe para que una caché antigua siga siendo legible)
+    //! "tk"=total_tokens, "rq"=api_requests, "ca"=cached_tokens. A nivel de
+    //! instantánea: "ps"=period_start (epoch s), "tt"=tokens de la ventana,
+    //! "ar"=peticiones y "ct"=tokens caché (opcionales, mismo criterio).
     private static function serializeState(state as CreditState) {
         var ms = [];
         var models = state.models();
@@ -387,12 +782,22 @@ class QuotaStore {
             if (m == null) {
                 continue;
             }
-            ms.add({
+            var e = {
                 "n" => m.model(),
                 "c" => m.credits()
-            });
+            };
+            if (m.tokens() != null) {
+                e.put("tk", m.tokens());
+            }
+            if (m.apiRequests() != null) {
+                e.put("rq", m.apiRequests());
+            }
+            if (m.cachedTokens() != null) {
+                e.put("ca", m.cachedTokens());
+            }
+            ms.add(e);
         }
-        return {
+        var out = {
             "a" => state.allowance(),
             "u" => state.used(),
             "r" => state.remaining(),
@@ -401,6 +806,19 @@ class QuotaStore {
             "t" => state.windowTotal(),
             "m" => ms
         };
+        if (state.periodStart() != null) {
+            out.put("ps", state.periodStart());
+        }
+        if (state.totTokens() != null) {
+            out.put("tt", state.totTokens());
+        }
+        if (state.totRequests() != null) {
+            out.put("ar", state.totRequests());
+        }
+        if (state.totCached() != null) {
+            out.put("ct", state.totCached());
+        }
+        return out;
     }
 
     //! Days-since-epoch (civil) for a y/m/d triple, Howard Hinnant's algorithm.
