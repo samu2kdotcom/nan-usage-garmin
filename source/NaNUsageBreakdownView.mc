@@ -290,11 +290,15 @@ class NaNUsageBreakdownView extends WatchUi.View {
     private function tokFontSmall() as Graphics.FontType {
         if (mTokFont == null) {
             var f = null;
-            try {
-                f = Graphics.getVectorFont(
-                    { :face => "RobotoCondensed-Regular", :size => 13 });
-            } catch (e) {
-                f = null;
+            // CRASH fr255: sin getVectorFont en el dispositivo la llamada es
+            // un error fatal no capturable; comprobar el símbolo antes.
+            if (Graphics has :getVectorFont) {
+                try {
+                    f = Graphics.getVectorFont(
+                        { :face => "RobotoCondensed-Regular", :size => 13 });
+                } catch (e) {
+                    f = null;
+                }
             }
             mTokFont = (f == null) ? Graphics.FONT_XTINY : f;
         }

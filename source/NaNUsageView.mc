@@ -1005,6 +1005,12 @@ class NaNUsageView extends WatchUi.View {
     //! Caras verificadas en el Device Reference del fr955: "Roboto-Black" y
     //! "RobotoCondensed-RegularItalic" (NUNCA ":Roboto_Black" con guion bajo).
     private function loadFont(face as Lang.String, size as Lang.Number, fallback as Graphics.FontType) as Graphics.FontType {
+        // CRASH fr255: el fr255/fr255m NO tienen getVectorFont (sin fuentes
+        // escalables). Llamarla es "Symbol Not Found", error FATAL que el
+        // try/catch no captura; hay que comprobar el símbolo antes.
+        if (!(Graphics has :getVectorFont)) {
+            return fallback;
+        }
         try {
             var f = Graphics.getVectorFont({ :face => face, :size => size });
             if (f != null) {
