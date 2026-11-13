@@ -41,9 +41,16 @@ La app lee `https://api.nan.builders/v1/usage` con tu API key (`sk-…`, se crea
 ## Compilar desde fuente
 
 ```bash
-# SDK Connect IQ 9.3.0 (monkeyc) + clave de desarrollador 4096:
+# SDK Connect IQ (monkeyc): apunta SDK a tu instalación.
+# Descarga: https://developer.garmin.com/connect-iq/sdk/
+# La línea de abajo sirve si lo tienes en ~/.Garmin/ConnectIQ/Sdks (ajústala si no):
+export SDK="$(ls -d ~/.Garmin/ConnectIQ/Sdks/connectiq-sdk-lin-* 2>/dev/null | sort | tail -n 1)"
+
+# Clave de desarrollador (RSA 4096, solo la primera vez; consérvala fuera del repo):
 openssl genrsa -out devkey.pem 4096
 openssl pkcs8 -topk8 -inform PEM -outform DER -in devkey.pem -out devkey.der -nocrypt
+
+# Compilar (fr955 o tu modelo: -d fr265, fr965, fenix7, ...):
 $SDK/bin/monkeyc -f monkey.jungle -d fr955 -w -l 2 -O2 -y devkey.der -o bin/NaNUsage.prg
 ```
 
