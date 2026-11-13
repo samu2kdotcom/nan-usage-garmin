@@ -1090,7 +1090,8 @@ class NaNUsageDelegate extends WatchUi.BehaviorDelegate {
 
     //! MENU abre SIEMPRE el editor de la API key: sirve para CAMBIARLA
     //! después de la primera vez (SELECT sigue siendo refrescar/pedirla).
-    //! En los modelos sin tecla MENU el firmware no lo invoca (no-op).
+    //! En fr955 el mapeo del device es mantener pulsado UP (no hay tecla
+    //! MENU); en modelos sin esa acción el firmware no lo invoca (no-op).
     function onMenu() as Lang.Boolean {
         var views = WatchUi.getCurrentView();
         if (views != null && views.size() > 0) {
