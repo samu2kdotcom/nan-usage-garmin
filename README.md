@@ -64,6 +64,7 @@ openssl pkcs8 -topk8 -inform PEM -outform DER -in devkey.pem -out devkey.der -no
 $SDK/bin/monkeyc -f monkey.jungle -d fr955 -w -l 2 -O2 -y devkey.der -o bin/NaNUsage.prg
 ```
 
+- Atajo: `scripts/build.sh [deviceId]` (detecta el SDK y firma con `./devkey.der`). Entorno completo en Linux con el reloj por USB, sideload y agente local: [`DESARROLLO.md`](DESARROLLO.md)
 - La clave (`devkey.der`) no está en el repo y define la autoría de la app: **conserva copia de seguridad fuera del repo**
 - Otros modelos: añade el `<iq:product>` al `manifest.xml`, compila con `-d <deviceId>` y publica el `.prg` en la release
 - El layout se escala solo a cada pantalla (base 260×260; píxel-idéntico en fr955)
