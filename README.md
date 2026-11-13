@@ -15,7 +15,7 @@ Widget Garmin que muestra el consumo de **créditos de tu cuenta de NaN Cloud** 
 
 1. Descarga el `.prg` de tu reloj desde la última [**release**](https://github.com/samu2kdotcom/nan-usage-garmin/releases)
 2. Cierra Garmin Express, conecta el reloj por USB y copia el archivo a **`GARMIN/APPS/`** renombrado a `NaNUsage.prg` (Windows/MTP nativo; macOS con [OpenMTP](https://openmtp.ganeshrvel.com/))
-3. Expulsa el reloj → "Verificando Connect IQ…" → instalada (aparece en Apps y en el glance loop)
+3. **Desconecta el cable** (o expulsa el volumen con seguridad) → el reloj muestra "Verificando Connect IQ…" y el `.prg` desaparece de `GARMIN/APPS` (es normal: ya está instalado). Aparece en Apps y en el glance loop.
 4. Abre la app y pulsa **SELECT** (primera vez): te pide tu API key con el teclado del reloj. Se guarda en el reloj; para cambiarla después, **MENU** (en fr955: mantén pulsado **UP**; ver abajo).
 
 **Actualizar a una versión nueva**: descarga el `.prg` de tu reloj y repite los pasos 1–2 (se sustituye la app). Si al reinstalar el reloj borra los datos de la app, te volverá a pedir la key — la vuelves a introducir con SELECT.
