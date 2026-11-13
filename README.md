@@ -1,10 +1,29 @@
-# NaN Usage — widget Connect IQ para Forerunner 955 / 955 Solar
+# NaN Usage — widget Connect IQ para Garmin (Forerunner 955/965/970/255/265 y fēnix 7)
 
 Muestra el consumo de **créditos** de la cuenta NaN (`nan.builders`) directamente en el
 reloj: % de créditos consumidos del periodo en un anillo de progreso, dato héroe, días
 hasta el reset del periodo, los 3 modelos que más créditos consumen en los últimos 30
 días con barra, y una **glance** con el % consumido, los créditos que quedan y la edad
 del último dato. Con la piel de marca **nan.builders**.
+
+**Instalación sin la Connect IQ Store**: descarga el `.prg` de tu modelo desde las
+[releases de GitHub](https://github.com/samu2kdotcom/nan-usage-garmin/releases), cópialo
+por USB a `GARMIN/APPS/` del reloj (renombrado a `NaNUsage.prg`) y listo. Pasos
+detallados en las notas de cada release.
+
+| Archivo en la release | Reloj |
+| --- | --- |
+| `NaNUsage-fr955.prg` | Forerunner 955 / 955 Solar |
+| `NaNUsage-fr965.prg` | Forerunner 965 |
+| `NaNUsage-fr970.prg` | Forerunner 970 |
+| `NaNUsage-fr255.prg` | Forerunner 255 |
+| `NaNUsage-fr255m.prg` | Forerunner 255 Music |
+| `NaNUsage-fr265.prg` | Forerunner 265 |
+| `NaNUsage-fenix7.prg` | fēnix 7 (7S/7X: pedir build) |
+
+El layout se escala automáticamente a cada pantalla (base 260×260; píxel-idéntico en
+el Forerunner 955). Para añadir otros modelos: añade el `<iq:product>` al manifest,
+recompila con `-d <deviceId>` y publica el nuevo `.prg` en la release.
 
 **Arquitectura:** la app NO habla Bluetooth con una app propia del móvil. Hace
 `Communications.makeWebRequest()` → la petición viaja por BLE a **Garmin Connect Mobile**
@@ -161,7 +180,9 @@ verde/violeta del isotipo oficial ES la marca.
   build canónico; ver "La API key" en la instalación).
 - `devkey.der` / `devkey.pem` — clave RSA **4096** del desarrollador (PKCS#8 DER / PEM),
   con copias de seguridad `devkey4096.der` / `devkey4096.pem`. No versionar.
-- `bin/NaNUsage.prg` — **build canónico** (sin API key), para la tienda.
+- `bin/NaNUsage.prg` — **build canónico** (sin API key), fr955. Para otros modelos:
+  `scripts/build.sh apps/nan-usage <deviceId> bin/NaNUsage-<deviceId>.prg` (fr965,
+  fr970, fr255, fr255m, fr265, fenix7 ya están en el manifest).
 - `bin/NaNUsage.personal.prg` — build personal con la key horneada (lo genera el
   lead con `scripts/bake-personal.sh`; no compartir). No se sube al repositorio.
 
@@ -195,7 +216,12 @@ RSA **4096** (PKCS#8 DER) que firma el binario y el paquete de tienda.
 La compilación termina con `BUILD SUCCESSFUL` y 0 errores (`ERROR:`); los `WARNING` de
 tipado de Monkey C (`-l 2`) son esperables y no afectan al binario.
 
-## Instalar en el Forerunner 955 / 955 Solar (sideload)
+## Instalar en el reloj (sideload)
+
+> La ruta recomendada para terceros es descargar el `.prg` de su modelo desde la
+> [página de releases](https://github.com/samu2kdotcom/nan-usage-garmin/releases); las
+> instrucciones van en las notas de la release. Lo que sigue es el flujo de desarrollo
+> (fr955):
 
 La app móvil **Connect IQ NO instala archivos `.prg`** (desde 2025 solo instala desde la
 tienda). El sideload es **por USB/MTP**, copiando el binario al almacenamiento del reloj.
