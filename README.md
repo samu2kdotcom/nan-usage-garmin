@@ -18,6 +18,8 @@ Widget Garmin que muestra el consumo de **créditos de tu cuenta de NaN Cloud** 
 3. Expulsa el reloj → "Verificando Connect IQ…" → instalada (aparece en Apps y en el glance loop)
 4. Abre la app y pulsa **SELECT** (primera vez): te pide tu API key con el teclado del reloj. Se guarda en el reloj; para cambiarla después, **MENU** (en fr955: mantén pulsado **UP**; ver abajo).
 
+**Actualizar a una versión nueva**: descarga el `.prg` de tu reloj y repite los pasos 1–2 (se sustituye la app). Si al reinstalar el reloj borra los datos de la app, te volverá a pedir la key — la vuelves a introducir con SELECT.
+
 | Archivo | Reloj |
 | --- | --- |
 | `NaNUsage-fr955.prg` | Forerunner 955 / 955 Solar |

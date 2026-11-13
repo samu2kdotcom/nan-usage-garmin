@@ -264,6 +264,13 @@ class NaNUsageView extends WatchUi.View {
             new ApiKeyPickerDelegate(self), WatchUi.SLIDE_UP);
     }
 
+    //! Muestra un mensaje de error puntual (p. ej. "Key demasiado corta" al
+    //! confirmar un texto no válido en el editor) hasta el próximo refresco.
+    function showError(msg as Lang.String) as Void {
+        mError = msg;
+        WatchUi.requestUpdate();
+    }
+
     function onSyncDone(state as CreditState or Null, err as Lang.String or Null) as Void {
         mSyncing = false;
         mSyncStartMs = 0;
@@ -882,21 +889,32 @@ class NaNUsageView extends WatchUi.View {
         dc.drawText(cx, yMsg, fMsg, msg,
             Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
 
-        // Hint medido también (212 px se salaban del margen de diseño):
-        // escalera "pulsa SELECT para reintentar" -> "SELECT para reintentar"
-        // -> recorte con ".."; "esperando al movil" (137) siempre cabe.
-        // SIN key (sideload) el hint invita a introducirla y degrada a
-        // "SELECT: poner API key" (la versión corta del mismo mensaje).
+        // Hint medido también (212 px se salaban del margen de diseño): se
+        // elige el PRIMER mensaje del estado que quepa en la cuerda, con una
+        // variante corta por estado; si no cabe ninguno, recorte con "..".
+        // Prioridad: sincronizando -> sin key -> key rechazada (401) ->
+        // reintentar. "esperando al movil" (137) siempre cabe.
         var hasKey = QuotaStore.hasApiKey();
-        var hint = mSyncing ? "esperando al movil" : "pulsa SELECT para reintentar";
-        if (!hasKey) {
+        var hint;
+        var hintShort;
+        if (mSyncing) {
+            hint = "esperando al movil";
+            hintShort = "esperando movil";
+        } else if (!hasKey) {
             hint = "SELECT para poner la API key";
+            hintShort = "SELECT: poner API key";
+        } else if (QuotaStore.hasAuthError()) {
+            hint = "SELECT para corregir la key";
+            hintShort = "SELECT: corregir key";
+        } else {
+            hint = "pulsa SELECT para reintentar";
+            hintShort = "SELECT para reintentar";
         }
         var fHint = Graphics.FONT_XTINY;
         var yHint = cy + sc(36);
         var availH = chordAvail(dc, yHint, dc.getFontHeight(fHint));
         if (dc.getTextWidthInPixels(hint, fHint) > availH) {
-            hint = hasKey ? "SELECT para reintentar" : "SELECT: poner API key";
+            hint = hintShort;
         }
         if (dc.getTextWidthInPixels(hint, fHint) > availH) {
             hint = fitToWidth(dc, hint, fHint, availH);
@@ -1071,9 +1089,10 @@ class NaNUsageDelegate extends WatchUi.BehaviorDelegate {
         if (views != null && views.size() > 0) {
             var appView = views[0] as NaNUsageView;
             if (appView != null) {
-                // SIN key (sideload): SELECT abre el editor del reloj en vez
-                // de lanzar una petición que fallaría con "Falta la API key".
-                if (!QuotaStore.hasApiKey()) {
+                // SIN key (sideload) o con la key rechazada (401): SELECT abre
+                // el editor del reloj para introducirla/corregirla en vez de
+                // lanzar una petición que volvería a fallar.
+                if (!QuotaStore.hasApiKey() || QuotaStore.hasAuthError()) {
                     appView.openKeyPicker();
                 } else {
                     // Política punto 4: SELECT fuerza el refresco SIEMPRE,
@@ -1121,6 +1140,9 @@ class ApiKeyPickerDelegate extends WatchUi.TextPickerDelegate {
         if (QuotaStore.saveApiKey(text)) {
             mView.forceSync();          // sync() ya repinta (requestUpdate)
             WatchUi.requestUpdate();    // defensa: repintar el estado vacío
+        } else {
+            // Texto no válido (< 8): no se guarda y se avisa en la vista.
+            mView.showError("Key demasiado corta");
         }
         return true;
     }

@@ -153,6 +153,9 @@ class QuotaStore {
     public static var ATTEMPT_KEY = "nan_attempt_epoch";
     // B3: texto del error del último intento (se borra cuando hay un éxito).
     public static var LAST_ERR_KEY = "nan_last_err";
+    // B4: true si el último intento acabó en 401 (key revocada o mal
+    // tecleada); SELECT abre el editor para corregirla y un éxito lo borra.
+    public static var AUTH_ERR_KEY as Lang.String = "nan_auth_err";
 
     private static var sCallback = null;
 
@@ -538,20 +541,30 @@ class QuotaStore {
         return key != null && key.length() >= 8;
     }
 
+    //! true SOLO si el último intento acabó en 401 (key revocada o mal
+    //! tecleada). Null-safe: sin marca en Storage, o con un valor que no sea
+    //! el booleano true, devuelve false.
+    public static function hasAuthError() as Lang.Boolean {
+        var v = Application.Storage.getValue(QuotaStore.AUTH_ERR_KEY) as Lang.Boolean;
+        return v != null && v;
+    }
+
     //! Guarda la API key tecleada EN EL RELOJ (sideload por USB: no hay
     //! editor de ajustes de Garmin Connect). Valida el mismo umbral de
-    //! refresh(); si no vale, devuelve false SIN tocar nada. Si vale, la
-    //! persiste en Properties y borra el último error persistido (B3, la
-    //! clave de fail()/getLastErr()) para que al volver a la vista no
-    //! reaparezca "Falta la API key".
+    //! refresh(); si no vale, deja "Key demasiado corta" como último error
+    //! (el estado vacío lo muestra) y devuelve false SIN tocar Properties.
+    //! Si vale, la persiste y borra "Falta la API key" y la marca de 401
+    //! (B3/B4, las claves de fail()/getLastErr() y de hasAuthError()).
     public static function saveApiKey(key as Lang.String) as Lang.Boolean {
         if (key == null || key.length() < 8) {
+            Application.Storage.setValue(QuotaStore.LAST_ERR_KEY as Lang.String,
+                "Key demasiado corta");
             return false;
         }
         Properties.setValue("api_key", key);
-        // B3: borrar el "Falta la API key" persistido (misma clave que
-        // fail()/getLastErr()); el cast evita el aviso por la clave sin tipo.
+        // B3/B4: el cast evita el aviso por las claves de Storage sin tipo.
         Application.Storage.deleteValue(QuotaStore.LAST_ERR_KEY as Lang.String);
+        Application.Storage.deleteValue(QuotaStore.AUTH_ERR_KEY as Lang.String);
         return true;
     }
 
@@ -590,6 +603,9 @@ class QuotaStore {
         if (responseCode != 200 || data == null) {
             var msg = "HTTP " + responseCode;
             if (responseCode == 401) {
+                // B4: key revocada o mal tecleada -> SELECT abrirá el editor
+                // para corregirla; la marca se borra en el próximo éxito.
+                Application.Storage.setValue(QuotaStore.AUTH_ERR_KEY as Lang.String, true);
                 msg = "API key rechazada";
             } else if (responseCode == -300) {
                 msg = "Sin conexión";
@@ -616,6 +632,8 @@ class QuotaStore {
         Application.Storage.setValue(QuotaStore.FETCH_KEY, QuotaStore.nowEpoch());
         // B3: éxito -> el aviso de error persistido desaparece.
         Application.Storage.deleteValue(QuotaStore.LAST_ERR_KEY);
+        // B4: y la marca de 401: la key vuelve a ser válida.
+        Application.Storage.deleteValue(QuotaStore.AUTH_ERR_KEY as Lang.String);
 
         if (QuotaStore.sCallback != null) {
             QuotaStore.sCallback.invoke(state, null);
