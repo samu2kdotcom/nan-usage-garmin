@@ -494,6 +494,28 @@ class NaNUsageBreakdownView extends WatchUi.View {
         return gx;
     }
 
+    //! Valor de tabla ajustado a `room` px (hasta el borde de la cuerda):
+    //! primero se cae la UNIDAD (" tok", " cr"; "/d" se conserva), la cifra
+    //! nunca; sólo si ni así cabe, recorte con "..".
+    private function fitValue(dc as Graphics.Dc, txt as Lang.String,
+            room as Lang.Number) as Lang.String {
+        if (room <= 0 || dc.getTextWidthInPixels(txt, Graphics.FONT_XTINY) <= room) {
+            return txt;
+        }
+        var units = [" tok", " cr"];
+        for (var i = 0; i < units.size(); i++) {
+            var u = units[i] as Lang.String;
+            var at = txt.find(u);
+            if (at != null) {
+                var head = txt.substring(0, at) as Lang.String;
+                var tail = txt.substring(at + u.length(), txt.length()) as Lang.String;
+                txt = head + tail;
+                break;
+            }
+        }
+        return fitFlatIfNeeded(dc, txt, room);
+    }
+
     //! Renglón tipo tabla: etiqueta (LT_GRAY) alineada a la derecha contra
     //! gx - KV_GUTTER y valor (color dado) a la izquierda desde gx +
     //! KV_GUTTER. El eje gx lo fija drawProjection() para centrar la tabla:
@@ -512,7 +534,8 @@ class NaNUsageBreakdownView extends WatchUi.View {
             fitFlatIfNeeded(dc, label, room), Graphics.TEXT_JUSTIFY_RIGHT);
         if (value.length() > 0) {
             dc.setColor(valueColor, Graphics.COLOR_TRANSPARENT);
-            dc.drawText(gx + g, topY, Graphics.FONT_XTINY, value,
+            dc.drawText(gx + g, topY, Graphics.FONT_XTINY,
+                fitValue(dc, value, cx + chordHalf(dc, topY) - (gx + g)),
                 Graphics.TEXT_JUSTIFY_LEFT);
         }
     }
@@ -687,7 +710,9 @@ class NaNUsageBreakdownView extends WatchUi.View {
         var verdict = "—";                   // sin allowance no hay veredicto
         var vColor = Graphics.COLOR_LT_GRAY;
         if (allowance > 0.0 && projection > allowance) {
-            verdict = "TE PASARÁS +" + fmtAmount(projection - allowance, ratio);
+            // En tokens la cifra ya lleva "~": "TE PASARÁS ~67M tok" (sin "+~").
+            verdict = (mTok ? "TE PASARÁS " : "TE PASARÁS +")
+                + fmtAmount(projection - allowance, ratio);
             vColor = Graphics.COLOR_RED;
         } else if (allowance > 0.0 && projection < allowance * 0.8) {
             verdict = "VAS BIEN";
@@ -766,7 +791,8 @@ class NaNUsageBreakdownView extends WatchUi.View {
             x += dc.getTextWidthInPixels(" · ", Graphics.FONT_XTINY);
         }
         dc.setColor(unitColor(), Graphics.COLOR_TRANSPARENT);
-        dc.drawText(x, qY, Graphics.FONT_XTINY, leftTxt, Graphics.TEXT_JUSTIFY_LEFT);
+        dc.drawText(x, qY, Graphics.FONT_XTINY,
+            fitValue(dc, leftTxt, cx + chordHalf(dc, qY) - x), Graphics.TEXT_JUSTIFY_LEFT);
 
         drawKV(dc, y0 + 4 * p, gx, "SE AGOTA", agota, aColor);
 
