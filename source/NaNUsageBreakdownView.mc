@@ -4,65 +4,45 @@ using Toybox.Graphics;
 using Toybox.Math;
 
 // =============================================================================
-// PANTALLAS SECUNDARIAS: DESGLOSE POR MODELOS (2/3) + PROYECCIÓN (3/3)
-// — nan.builders, fr955 260x260 redondo.
+// PANTALLAS SECUNDARIAS (2/5 .. 5/5) — nan.builders, fr955 260x260 redondo.
 //
 // Se PUSH desde la vista principal con DOWN (NaNUsageDelegate.onNextPage() ->
 // pushView) y trae SU PROPIO delegate, de modo que la vista principal conserva
-// intactos su SELECT (refresco) y su BACK (salir). Es UNA vista con DOS
-// pantallas internas (mScreen): apilar Desglose y Proyección como views
-// separadas obligaría a doble popView para cerrar el ciclo Proyección ->
-// Principal, que WatchUi no garantiza atómico; así DOWN/UP manejan el ciclo
-// con transiciones de una sola operación sobre la pila.
+// intactos su SELECT (refresco) y su BACK (salir). Es UNA vista con CUATRO
+// pantallas internas (mScreen): apilarlas como views separadas obligaría a
+// varios popView para cerrar el ciclo, que WatchUi no garantiza atómico.
 //
-// NAVEGACIÓN (3 pantallas, ciclo):
-//   Principal --DOWN--> Desglose --DOWN (última página)--> Proyección
-//   Proyección --DOWN--> Principal (ciclo: popView)
-//   Proyección --UP--> Desglose (última página); Desglose --UP (pág. 1)-->
-//   Principal (popView); dentro del desglose DOWN/UP PAGINAN.
-//   BACK siempre vuelve a la principal (y desde la principal, sale). SELECT
-//   se consume aquí a propósito: el refresco manual es de la vista principal.
+// NAVEGACIÓN (5 pantallas, ciclo):
+//   Principal --DOWN--> Desglose (pagina) --> 24 H --> 7 D --> Actividad
+//   Actividad --DOWN--> Principal (popView). UP recorre al revés; en la
+//   página 1 del desglose UP vuelve a la principal. BACK siempre vuelve a
+//   la principal.
+//   START (SELECT) alterna la UNIDAD en desglose y proyecciones: créditos
+//   (cifras blancas, "cr") <-> tokens (cifras azules, "tok"). Se recuerda
+//   en Storage (QuotaStore.showTokens/toggleUnit).
 //
-// DESGLOSE (2/3): cabecera "DESGLOSE · 30 D" + total "4.0K de 7.0K créditos"
-// del PERIODO (bloque "credits"), y debajo la lista de los modelos con
-// consumo de totals.by_model (de la CACHÉ de QuotaStore: esta pantalla NO
-// toca red; los modelos con credits <= 0 —gratuitos— NO se listan, si tras
-// filtrar no queda ninguno se muestra "Sin consumo"). Cada fila: etiqueta
-// única compacta en MAYÚSCULAS ("GLM5.3", "GLM5.3F", "DS4.1PRO"; assignLabels nunca repite
-// etiqueta), créditos en blanco y TOKENS en gris y más pequeño
-// ("GLM5.3  2.1K · 156M") si caben; debajo, barra fina (2 px) de pista
-// DK_GRAY con relleno COLOR_PURPLE de marca proporcional a la cuota sobre
-// totals.credits (la ventana, NO el allowance del periodo: no suman el
-// héroe). El "53%" de cuota deja su sitio a los tokens: la barra ya codifica
-// la fracción.
+// DESGLOSE (2/5): "DESGLOSE · 30 D" + total ("4.0K de 7.0K créditos" del
+// PERIODO o "5.2B tokens" de la ventana) y la lista de modelos con consumo
+// de totals.by_model (caché de QuotaStore; los gratuitos no se listan).
+// Cada fila: etiqueta única compacta, cifra en la unidad activa y barra
+// fina violeta con la cuota del modelo en la ventana (créditos o tokens).
 //
-// PROYECCIÓN (3/3): con los datos ya cacheados (credits + totals + by_model),
-// sin red. RITMO créditos/día = used / días transcurridos desde period_start
-// (guardado en caché como "ps"; si falta —caché vieja— se estima con 30 días
-// y se marca "~"). PROYECCIÓN a fin de periodo = ritmo × días totales del
-// periodo, con veredicto semafórico: > allowance -> "TE PASARÁS +exceso" en
-// rojo; < 80 % -> "VAS BIEN" en verde; si no -> "JUSTO" en ámbar. QUEDAN
-// días del periodo y créditos restantes. Segunda sección con los conteos de
-// la ventana: TOKENS, PETICIONES y CACHÉ % (cached/total). Dato ausente ->
-// "—". Los renglones son una tabla con eje común: etiquetas alineadas a la
-// derecha y valores a la izquierda del eje, desplazado para centrar el
-// bloque; si una etiqueta no cupiera en la cuerda del círculo se recorta.
+// PROYECCIÓN 24 H (3/5) y 7 D (4/5): ritmo de la ventana MÓVIL estimada con
+// la serie diaria (QuotaStore.getSeries: la API sólo agrega por día UTC;
+// el día más antiguo se prorratea) extrapolado al fin del periodo:
+// RITMO /d, PROYECCIÓN (usado + ritmo x días restantes), veredicto (TE
+// PASARÁS rojo / JUSTO ámbar / VAS BIEN verde), QUEDAN días · saldo y SE
+// AGOTA (cuándo, a este ritmo). En tokens: créditos x ratio tokens/crédito
+// de la misma ventana.
 //
-// MULTI-DISPOSITIVO: márgenes escalados (base 260) y pasos verticales desde
-// las métricas reales de FONT_XTINY; ver la cabecera de constantes.
+// ACTIVIDAD · 7 D (5/5): barras de créditos por día (hoy en verde, inicial
+// del día debajo) y PETICIONES, TOK/PET, CACHÉ (cached/prompt) de la semana
+// más el HISTÓRICO de tokens (all_time).
 //
-// Paginación del desglose: hasta 7 filas por página (las que quepan entre la
-// hairline y el pie en cada dispositivo; la cabecera es fija); con más
-// de una página, el pie combina página y pantalla: "1/2 · 2/3"; si no, sólo
-// "2/3" (y "3/3" en proyección). Indicador discreto LT_GRAY abajo.
-//
-// Estilo idéntico: fondo negro, textos blancos/grises, UNA hairline DK_GRAY
-// por vista (regla de marca) y violeta COLOR_PURPLE exacto (el fr955
-// cuantiza cualquier hex a su paleta de 64 colores).
-//
-// Si un campo falta (caché antigua sin extensión tk/rq/ca o sin "ps"), la
-// fila muestra "—" en su lugar y NO rompe el arranque (ver QuotaStore: el
-// nombre es el único campo imprescindible).
+// Geometría: márgenes escalados con sc() (base 260) y pasos verticales de
+// las métricas REALES de FONT_XTINY. Estilo: fondo negro, UNA hairline
+// DK_GRAY por vista, violeta COLOR_PURPLE exacto (paleta de 64 colores).
+// Dato ausente -> "—"; sin serie diaria -> "Sin datos diarios".
 // =============================================================================
 class NaNUsageBreakdownView extends WatchUi.View {
 
@@ -76,7 +56,7 @@ class NaNUsageBreakdownView extends WatchUi.View {
     // valores resultantes reproducen la maqueta original (título 46, total
     // 70, hairline 96, bases 116 + 18 k, pie 230; proyección 78/99/120/141 y
     // 168/188/208).
-    private const TITLE_Y = 46;         // top de "DESGLOSE · 30 D" / "PROYECCIÓN"
+    private const TITLE_Y = 36;         // top de "DESGLOSE · 30 D" / "PROYECCIÓN"
     private const HEAD_GAP = 3;         // aire entre título y total
     private const HAIR_GAP = 5;         // aire entre la última línea y la hairline
     private const HAIR_HALF = 74;       // hairline de cx-74 a cx+74
@@ -93,16 +73,25 @@ class NaNUsageBreakdownView extends WatchUi.View {
     // separa de la de periodo sólo con aire (SECTION_GAP).
     private const KV_TOP_GAP = 6;       // hairline -> RITMO
     private const KV_PITCH_1 = 21;      // RITMO/PROYECCIÓN/veredicto/QUEDAN
-    private const KV_PITCH_2 = 20;      // TOKENS/PETICIONES/CACHÉ
-    private const SECTION_GAP = 6;      // aire entre las dos secciones
+    private const KV_PITCH_2 = 20;      // renglones de ACTIVIDAD
+    private const CHART_H = 26;         // alto de las barras de ACTIVIDAD
+    private const CHART_SLOT = 17;      // ancho de cada día (barra + aire)
+    private const LAST_SCREEN = 3;      // 0 desglose, 1 24 H, 2 7 D, 3 actividad
+    private const TOK_COLOR = Graphics.COLOR_BLUE;  // cifras en tokens
+    // Barras de ACTIVIDAD: lila claro tirando a rosa (0xFF55FF existe tal
+    // cual en la paleta de 64 colores); el violeta de marca no contrasta
+    // con el negro en la pantalla MIP del fr955.
+    private const BAR_COLOR = 0xFF55FF;
+    private const SERIES_TTL_S = 600;   // la serie diaria se repide si > 10 min
     private const KV_MARGIN = 10;       // margen al cristal de los renglones
     private const PAGE_PAD = 4;         // aire interior del half de cuerda
     private const KV_GUTTER = 5;        // medio eje central etiqueta | valor
 
-    private var mState;   //!< CreditState o null (instantánea de la caché)
-    private var mPage;    //!< página del desglose, 0-based
-    private var mScreen;  //!< 0 = DESGLOSE (2/3), 1 = PROYECCIÓN (3/3)
-    private var mTokFont; //!< fuente pequeña de tokens (vectorial) o null
+    private var mState as CreditState or Null; //!< instantánea de la caché
+    private var mPage as Lang.Number = 0;     //!< página del desglose, 0-based
+    private var mScreen as Lang.Number = 0;   //!< 0 DESGLOSE (2/5), 1 24 H (3/5),
+                                              //!< 2 7 D (4/5), 3 ACTIVIDAD (5/5)
+    private var mTok as Lang.Boolean = false; //!< unidad: true = tokens (START alterna)
     private var mS as Lang.Float = 1.0; //!< factor de escala = min(w, h) / 260.0
     private var mFh as Lang.Number = 21; //!< altura de FONT_XTINY (px)
     private var mAsc as Lang.Number = 17; //!< ascent de FONT_XTINY (top de celda -> base)
@@ -114,7 +103,6 @@ class NaNUsageBreakdownView extends WatchUi.View {
         mState = QuotaStore.getCachedState();
         mPage = 0;
         mScreen = 0;
-        mTokFont = null;
         mS = 1.0;
         mFh = 21;
         mAsc = 17;
@@ -133,8 +121,7 @@ class NaNUsageBreakdownView extends WatchUi.View {
         var s = m / 260.0;
         if (s != mS) {
             mS = s;
-            mTokFont = null;
-        }
+            }
         mFh = dc.getFontHeight(Graphics.FONT_XTINY);
         mAsc = Graphics.getFontAscent(Graphics.FONT_XTINY);
         if (mAsc <= 0 || mAsc > mFh) {
@@ -223,15 +210,21 @@ class NaNUsageBreakdownView extends WatchUi.View {
         // Sin caché: "Sin datos" y BACK para volver, en el patrón del estado
         // vacío de la vista principal. Con caché pero sin NINGÚN modelo con
         // consumo (todo gratuito): "Sin consumo".
-        if (mState == null) {
+        var st = mState;
+        if (st == null) {
             drawNoData(dc, cx, h / 2, "Sin datos");
             return;
         }
 
+        mTok = QuotaStore.showTokens();
         if (mScreen == 1) {
-            drawProjection(dc, cx);
+            drawProjection(dc, cx, 1);
+        } else if (mScreen == 2) {
+            drawProjection(dc, cx, 7);
+        } else if (mScreen == 3) {
+            drawActivity(dc, cx);
         } else {
-            if (mState.models().size() == 0) {
+            if (st.models().size() == 0) {
                 drawNoData(dc, cx, h / 2, "Sin consumo");
                 return;
             }
@@ -242,7 +235,7 @@ class NaNUsageBreakdownView extends WatchUi.View {
     }
 
     // -------------------------------------------------------------------------
-    // DESGLOSE (2/3)
+    // DESGLOSE (2/5)
     // -------------------------------------------------------------------------
 
     //! Cabecera: etiqueta de sección gris (patrón .sechead: MAYÚSCULAS,
@@ -254,16 +247,29 @@ class NaNUsageBreakdownView extends WatchUi.View {
             fitFlatIfNeeded(dc, "DESGLOSE · 30 D", 2 * chordHalf(dc, titleY)),
             Graphics.TEXT_JUSTIFY_CENTER);
 
-        // Total del periodo; si no cabe en la cuerda, sin " créditos".
+        // Total: en créditos el del PERIODO ("4.0K de 7.0K créditos"); en
+        // tokens el de la VENTANA ("5.2B tokens"), en azul. Si no cabe en la
+        // cuerda, sin la palabra de la unidad.
+        var st = mState;
+        if (st == null) {
+            return;                       // drawHeader sólo corre con caché
+        }
         var tY = totalY();
         var maxW = 2 * chordHalf(dc, tY);
-        var short = QuotaStore.creditLabel(mState.used()) + " de "
-            + QuotaStore.creditLabel(mState.allowance());
-        var total = short + " créditos";
+        var total;
+        var short;
+        if (mTok) {
+            short = QuotaStore.tokenLabel(st.totTokens()) + " tok";
+            total = QuotaStore.tokenLabel(st.totTokens()) + " tokens";
+        } else {
+            short = QuotaStore.creditLabel(st.used()) + " de "
+                + QuotaStore.creditLabel(st.allowance());
+            total = short + " créditos";
+        }
         if (dc.getTextWidthInPixels(total, Graphics.FONT_XTINY) > maxW) {
             total = fitFlatIfNeeded(dc, short, maxW);
         }
-        dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_TRANSPARENT);
+        dc.setColor(unitColor(), Graphics.COLOR_TRANSPARENT);
         dc.drawText(cx, tY, Graphics.FONT_XTINY, total,
             Graphics.TEXT_JUSTIFY_CENTER);
 
@@ -275,12 +281,15 @@ class NaNUsageBreakdownView extends WatchUi.View {
 
     //! Página corriente de la lista: ETIQUETA única (LT_GRAY, MAYÚSCULAS,
     //! compacta, truncada sólo si aun así no cupiera) a la izquierda;
-    //! a la derecha los créditos (WHITE) y, si caben, los TOKENS en gris y
-    //! más pequeño ("2.1K · 156M"); bajo el texto, barra fina de pista
+    //! a la derecha los créditos (WHITE); bajo el texto, barra fina de pista
     //! DK_GRAY con relleno COLOR_PURPLE proporcional a la cuota sobre
     //! totals.credits (ventana).
     private function drawRows(dc as Graphics.Dc, cx as Lang.Number) as Void {
-        var models = mState.models();
+        var st = mState;
+        if (st == null) {
+            return;                       // drawRows sólo corre con caché
+        }
+        var models = st.models();
         var rowHalf = rowHalfWidth(dc);
         var left = cx - rowHalf;
         var right = cx + rowHalf;
@@ -290,94 +299,63 @@ class NaNUsageBreakdownView extends WatchUi.View {
         var pitch = rowPitch();
         var barOff = rowBarOff();
         var barH = sc1(BAR_H);
-        // Hueco créditos|tokens sin separador (modo 2): un espacio de la
-        // fuente de tokens; con 2 px "980147M" se leía como un solo número.
-        var gap = dc.getTextWidthInPixels(" ", tokFontSmall());
-        if (gap < sc1(3)) {
-            gap = sc1(3);
-        }
-
         for (var i = 0; i < mRowsPerPage; i++) {
             var idx = start + i;
             if (idx >= models.size()) {
                 break;
             }
-            var m = models[idx] as ModelCredit;
-            if (m == null) {
+            var mV = models[idx];
+            if (!(mV instanceof ModelCredit)) {
                 continue;
             }
+            var m = mV as ModelCredit;
             var baseY = firstBase + i * pitch;
             var topY = baseY - mAsc;
             var barY = baseY + barOff;
 
+            // Cifra en la unidad activa: "3.1K cr" (blanco) o "1.2B tok"
+            // (azul). La unidad se omite en la fila si la etiqueta entera no
+            // cupiera con ella (el nombre manda; la cabecera ya la dice).
             var credits = m.credits();
-            var creditTxt = (credits == null) ? "—"
-                : QuotaStore.creditLabel(credits);
+            var num = mTok
+                ? QuotaStore.tokenLabel(m.tokens())
+                : ((credits == null) ? "—" : QuotaStore.creditLabel(credits));
+            var creditTxt = num + (mTok ? " tok" : " cr");
+            var air0 = sc(6) + sc1(2);
+            if (span - dc.getTextWidthInPixels(creditTxt, Graphics.FONT_XTINY) - air0
+                    < dc.getTextWidthInPixels(m.label(), Graphics.FONT_XTINY)) {
+                creditTxt = num;
+            }
             var creditW = dc.getTextWidthInPixels(creditTxt,
                 Graphics.FONT_XTINY);
 
-            // Tokens de la fila ("156M"), en gris y más pequeño, SI CABEN.
-            // Escalera "si cabe" por fila (el nombre NUNCA se sacrifica):
-            //   1. "2.1K · 156M" (cluster con separador de marca)
-            //   2. "2.1K 156M"   (sin separador, un espacio de aire)
-            //   3. "2.1K"        (sin tokens: la etiqueta entera no cabría)
-            var tokTxt = (m.tokens() == null)
-                ? null : QuotaStore.tokenLabel(m.tokens());
-            var tokFont = tokFontSmall();
-            var tokW = 0;
-            var sepW = 0;
-            if (tokTxt != null) {
-                tokW = dc.getTextWidthInPixels(tokTxt, tokFont);
-                sepW = dc.getTextWidthInPixels(" · ", tokFont);
-            }
-            // El nombre COMPLETO manda: los tokens sólo se muestran si cabe
-            // la etiqueta entera (nada de "DS4.1.." por enseñar "147M").
-            var nameMin = dc.getTextWidthInPixels(m.label(), Graphics.FONT_XTINY);
+            // Sólo créditos (los tokens se quitaron: confundían "454 · 3.6B").
             var air = sc(6) + sc1(2);
-            var tokMode = 0;            // 1 = con separador, 2 = sin separador
-            if (tokTxt != null) {
-                if (span - creditW - tokW - sepW - air - nameMin >= 0) {
-                    tokMode = 1;
-                } else if (span - creditW - tokW - gap - air - nameMin >= 0) {
-                    tokMode = 2;
-                }
-            }
-            var tokBlockW = (tokMode == 1) ? tokW + sepW
-                : ((tokMode == 2) ? tokW + gap : 0);
-
-            var nameAvail = span - creditW - tokBlockW - air;
-            var name = fitLabel(dc, m.label(), nameAvail);
+            var name = fitLabel(dc, m.label(), span - creditW - air);
 
             dc.setColor(Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
             dc.drawText(left, topY, Graphics.FONT_XTINY, name,
                 Graphics.TEXT_JUSTIFY_LEFT);
+            dc.setColor(unitColor(), Graphics.COLOR_TRANSPARENT);
+            dc.drawText(right, topY, Graphics.FONT_XTINY, creditTxt,
+                Graphics.TEXT_JUSTIFY_RIGHT);
 
-            if (tokMode > 0) {
-                // Cluster derecho: créditos blancos en XTINY y tokens en la
-                // fuente pequeña, alineados por la línea de base. Con modo 1
-                // los tokens van tras el separador " · " (gris); con modo 2,
-                // tras un espacio.
-                var tokTop = baseY - Graphics.getFontAscent(tokFont);
-                dc.setColor(Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
-                dc.drawText(right, tokTop, tokFont,
-                    (tokMode == 1 ? " · " : "") + tokTxt,
-                    Graphics.TEXT_JUSTIFY_RIGHT);
-                dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_TRANSPARENT);
-                dc.drawText(right - tokBlockW, topY, Graphics.FONT_XTINY,
-                    creditTxt, Graphics.TEXT_JUSTIFY_RIGHT);
-            } else {
-                dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_TRANSPARENT);
-                dc.drawText(right, topY, Graphics.FONT_XTINY, creditTxt,
-                    Graphics.TEXT_JUSTIFY_RIGHT);
+            // Barra fina: cuota del modelo en la ventana, en la unidad activa
+            // (créditos sobre totals.credits; tokens sobre total_tokens).
+            var f = 0.0;
+            if (mTok) {
+                var mt = QuotaStore.asFloat(m.tokens());
+                var ttf = QuotaStore.asFloat(st.totTokens());
+                if (mt != null && ttf != null && ttf > 0.0) {
+                    f = mt / ttf;
+                    f = (f > 1.0) ? 1.0 : f;
+                }
+            } else if (credits != null) {
+                f = m.windowFraction(st.windowTotal());
             }
-
-            // Barra fina: relleno = cuota del modelo sobre totals.credits.
-            var f = (credits == null)
-                ? 0.0
-                : m.windowFraction(mState.windowTotal());
             dc.setColor(Graphics.COLOR_DK_GRAY, Graphics.COLOR_TRANSPARENT);
             dc.fillRectangle(left, barY, span, barH);
-            var fillW = (span * f).toNumber();
+            var fillW = (span * f).toNumber() as Lang.Number;
             if (fillW < 1 && f > 0.0) {
                 fillW = 1;
             }
@@ -425,36 +403,12 @@ class NaNUsageBreakdownView extends WatchUi.View {
         return half;
     }
 
-    //! Fuente PEQUEÑA para los tokens: vectorial "RobotoCondensed-Regular"
-    //! a ~0,62 de la altura de FONT_XTINY (13 px en fr955, cara verificada
-    //! en simulator.json) con fallback a
-    //! FONT_XTINY; el display nunca asume que sea más pequeña (el ancho se
-    //! mide y el token se omite si no cabe).
-    private function tokFontSmall() as Graphics.FontType {
-        if (mTokFont == null) {
-            var f = null;
-            // CRASH fr255: sin getVectorFont en el dispositivo la llamada es
-            // un error fatal no capturable; comprobar el símbolo antes.
-            if (Graphics has :getVectorFont) {
-                try {
-                    var sz = (0.62 * mFh + 0.5).toNumber();
-                    f = Graphics.getVectorFont(
-                        { :face => "RobotoCondensed-Regular", :size => sz });
-                } catch (e) {
-                    f = null;
-                }
-            }
-            mTokFont = (f == null) ? Graphics.FONT_XTINY : f;
-        }
-        return mTokFont;
-    }
-
     //! Indicador de pie: página del desglose + pantalla. Con más de una
-    //! página "1/2 · 2/3"; si no, sólo la pantalla ("2/3").
+    //! página "1/2 · 2/5"; si no, sólo la pantalla ("2/5").
     private function drawPageIndicator(dc as Graphics.Dc, cx as Lang.Number) as Void {
         var pages = pageCount();
         var txt = ((pages > 1) ? ((mPage + 1) + "/" + pages + " · ") : "")
-            + "2/3";
+            + "2/5";
         dc.setColor(Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
         dc.drawText(cx, pageY(dc), Graphics.FONT_XTINY, txt,
             Graphics.TEXT_JUSTIFY_CENTER);
@@ -476,13 +430,14 @@ class NaNUsageBreakdownView extends WatchUi.View {
 
     //! Páginas del desglose (>= 1).
     private function pageCount() as Lang.Number {
-        var n = (mState == null) ? 0 : mState.models().size();
+        var st = mState;
+        var n = (st == null) ? 0 : st.models().size();
         var pages = (n + mRowsPerPage - 1) / mRowsPerPage;
         return (pages < 1) ? 1 : pages;
     }
 
     // -------------------------------------------------------------------------
-    // PROYECCIÓN (3/3)
+    // Helpers de tabla (proyecciones y actividad)
     // -------------------------------------------------------------------------
 
     //! Semáforo por severidad (gemela del de la vista principal): verde
@@ -523,6 +478,22 @@ class NaNUsageBreakdownView extends WatchUi.View {
         return (half > 0) ? half : 0;
     }
 
+    //! Eje de tabla: si a la altura de algún renglón (tops `ys`) su etiqueta
+    //! no cabe entre el borde de la cuerda y el eje, el eje se desplaza a la
+    //! derecha lo justo antes de recurrir al recorte con "..".
+    private function clampAxis(dc as Graphics.Dc, cx as Lang.Number, gx as Lang.Number,
+            labels as Lang.Array, ys as Lang.Array) as Lang.Number {
+        var g = sc1(KV_GUTTER);
+        for (var i = 0; i < labels.size(); i++) {
+            var need = cx - chordHalf(dc, ys[i] as Lang.Number) + g
+                + dc.getTextWidthInPixels(labels[i] as Lang.String, Graphics.FONT_XTINY);
+            if (gx < need) {
+                gx = need;
+            }
+        }
+        return gx;
+    }
+
     //! Renglón tipo tabla: etiqueta (LT_GRAY) alineada a la derecha contra
     //! gx - KV_GUTTER y valor (color dado) a la izquierda desde gx +
     //! KV_GUTTER. El eje gx lo fija drawProjection() para centrar la tabla:
@@ -546,158 +517,213 @@ class NaNUsageBreakdownView extends WatchUi.View {
         }
     }
 
-    //! Pantalla PROYECCIÓN (3/3): ritmo, proyección y veredicto del PERIODO
-    //! (bloque "credits"), días/créditos restantes y los conteos de la
-    //! VENTANA (tokens, peticiones, caché). Todo de la caché: sin red.
-    private function drawProjection(dc as Graphics.Dc, cx as Lang.Number) as Void {
-        // Geometría vertical desde la fuente: renglones a paso >= altura de
-        // FONT_XTINY (en fr955: 78/99/120/141 y 168/188/208). Si en algún
-        // dispositivo la pila no cupiera sobre el pie, se comprime el paso
-        // (nunca por debajo de mayúsculas + 4 px) y se sube la cabecera.
+    // -------------------------------------------------------------------------
+    // Unidad (START alterna créditos <-> tokens en las pantallas 2-4)
+    // -------------------------------------------------------------------------
+
+    //! Color de las CIFRAS según la unidad: créditos en blanco, tokens en
+    //! azul (COLOR_BLUE existe tal cual en la paleta de 64 colores).
+    private function unitColor() as Graphics.ColorType {
+        return mTok ? TOK_COLOR : Graphics.COLOR_WHITE;
+    }
+
+    //! Cantidad en la unidad activa a partir de CRÉDITOS: "3.1K cr" o, en
+    //! tokens, "~1.2B tok": créditos x ratio tokens/crédito de la ventana.
+    //! Es una EQUIVALENCIA con la mezcla de modelos de esa ventana (un
+    //! crédito rinde más tokens en modelos baratos), de ahí la "~". Ratio
+    //! desconocido -> "—".
+    private function fmtAmount(credits as Lang.Float, ratio as Lang.Float or Null) as Lang.String {
+        if (mTok) {
+            if (ratio == null) {
+                return "—";
+            }
+            return "~" + QuotaStore.tokenLabel(credits * ratio) + " tok";
+        }
+        return QuotaStore.creditLabel(credits) + " cr";
+    }
+
+    //! START: alterna la unidad (desglose y proyecciones). En ACTIVIDAD no
+    //! aplica (sus cifras ya llevan su unidad).
+    function onSelectPressed() as Void {
+        if (mScreen <= 2) {
+            QuotaStore.toggleUnit();
+            WatchUi.requestUpdate();
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Serie diaria (QuotaStore.getSeries): helpers
+    // -------------------------------------------------------------------------
+
+    //! Valor del día `back` (0 = hoy UTC, 1 = ayer...) de la serie `key`.
+    //! La serie se pidió el día s["d"]; si es de un día anterior, los días
+    //! posteriores no existen (0).
+    private function dayVal(s as Lang.Dictionary<Lang.String, Lang.Object or Null>, key as Lang.String,
+            back as Lang.Number) as Lang.Float {
+        var arrV = s.get(key);
+        if (!(arrV instanceof Lang.Array)) {
+            return 0.0;
+        }
+        var arr = arrV as Lang.Array<Lang.Object>;
+        var today = QuotaStore.nowEpoch() / 86400;
+        var idx = 7 - back - (today - (s.get("d") as Lang.Number));
+        if (idx < 0 || idx > 7 || idx >= arr.size()) {
+            return 0.0;
+        }
+        var v = QuotaStore.asFloat(arr[idx]);
+        return (v == null) ? 0.0 : v;
+    }
+
+    //! Suma ponderada de la ventana: `days` = 1 (24 h) o 7. Los `days` días
+    //! más recientes (hoy incluido, parcial) completos + el día anterior
+    //! prorrateado por lo que falta del día UTC de hoy: ventana MÓVIL de
+    //! days x 24 h estimada con datos diarios (la API no da horas).
+    private function windowSum(s as Lang.Dictionary<Lang.String, Lang.Object or Null>, key as Lang.String,
+            days as Lang.Number) as Lang.Float {
+        var f = (QuotaStore.nowEpoch() % 86400) / 86400.0;
+        var sum = 0.0;
+        for (var b = 0; b < days; b++) {
+            sum += dayVal(s, key, b);
+        }
+        return sum + dayVal(s, key, days) * (1.0 - f);
+    }
+
+    //! Pantalla sin serie diaria (aún no llegó la 2ª petición): título,
+    //! aviso y pie.
+    private function drawNoSeries(dc as Graphics.Dc, cx as Lang.Number,
+            title as Lang.String, footer as Lang.String) as Void {
+        var titleY = sc(TITLE_Y);
+        dc.setColor(Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
+        dc.drawText(cx, titleY, Graphics.FONT_XTINY, title,
+            Graphics.TEXT_JUSTIFY_CENTER);
+        var hairY = titleY + mFh + sc(HAIR_GAP);
+        dc.setColor(Graphics.COLOR_DK_GRAY, Graphics.COLOR_TRANSPARENT);
+        dc.drawLine(cx - sc(HAIR_HALF), hairY, cx + sc(HAIR_HALF), hairY);
+        var cy = dc.getHeight() / 2;
+        dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_TRANSPARENT);
+        dc.drawText(cx, cy - mFh, Graphics.FONT_XTINY, "Sin datos diarios",
+            Graphics.TEXT_JUSTIFY_CENTER);
+        dc.setColor(Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
+        dc.drawText(cx, cy + sc(2), Graphics.FONT_XTINY, "refresca en la 1/5",
+            Graphics.TEXT_JUSTIFY_CENTER);
+        dc.drawText(cx, pageY(dc), Graphics.FONT_XTINY, footer,
+            Graphics.TEXT_JUSTIFY_CENTER);
+    }
+
+    // -------------------------------------------------------------------------
+    // PROYECCIÓN 24 H (3/5) y 7 D (4/5)
+    // -------------------------------------------------------------------------
+
+    //! Ritmo de la ventana móvil (24 h o 7 d) extrapolado al fin del periodo
+    //! de facturación: RITMO /d, PROYECCIÓN (usado + ritmo x días que
+    //! quedan), veredicto, QUEDAN (días · saldo) y SE AGOTA (cuándo, a este
+    //! ritmo). Todo en la unidad activa; en tokens, créditos x ratio
+    //! tokens/crédito de la propia ventana.
+    private function drawProjection(dc as Graphics.Dc, cx as Lang.Number,
+            days as Lang.Number) as Void {
+        var st = mState;
+        if (st == null) {
+            return;                       // drawProjection sólo corre con caché
+        }
+        var title = (days == 1) ? "PROYECCIÓN · 24 H" : "PROYECCIÓN · 7 D";
+        var footer = (days == 1) ? "3/5" : "4/5";
+        var s = QuotaStore.getSeries();
+        if (s == null) {
+            drawNoSeries(dc, cx, title, footer);
+            return;
+        }
+
+        // --- Geometría: 5 renglones bajo la hairline; si no cupieran sobre
+        // el pie, se comprime el paso (nunca por debajo de mayúsculas + 4).
         var pY = pageY(dc);
         var titleY = sc(TITLE_Y);
-        var p1 = sc(KV_PITCH_1);
-        var p2 = sc(KV_PITCH_2);
-        if (p1 < mFh) {
-            p1 = mFh;
+        var p = sc(KV_PITCH_1);
+        if (p < mFh) {
+            p = mFh;
         }
-        if (p2 < mFh - 1) {
-            p2 = mFh - 1;
-        }
-        var secGap = sc(SECTION_GAP);
         var head = mFh + sc(HAIR_GAP) + sc(KV_TOP_GAP);
-        // de titleY al bottom de CACHÉ (celda completa) + 1 px sobre el pie
-        var need = head + 4 * p1 + secGap + 2 * p2 + mFh;
-        var avail = pY - sc1(1) - titleY;
-        if (need > avail) {
-            var minTitle = sc(TITLE_Y) / 2;
-            var lift = need - avail;
-            if (lift > titleY - minTitle) {
-                lift = titleY - minTitle;
-            }
-            titleY -= lift;
-            avail += lift;
-        }
-        if (need > avail) {
-            var k = (avail - head - mFh) * 1.0 / (4 * p1 + secGap + 2 * p2);
-            var minP = mCap + 4;
-            p1 = (p1 * k).toNumber();
-            p2 = (p2 * k).toNumber();
-            secGap = (secGap * k).toNumber();
-            if (p1 < minP) {
-                p1 = minP;
-            }
-            if (p2 < minP) {
-                p2 = minP;
+        var avail = pY - sc1(1) - titleY - head - mFh;
+        if (4 * p > avail) {
+            p = avail / 4;
+            if (p < mCap + 4) {
+                p = mCap + 4;
             }
         }
         var hairY = titleY + mFh + sc(HAIR_GAP);
-        var ritmoY = hairY + sc(KV_TOP_GAP);
-        var proyY = ritmoY + p1;
-        var verdictY = proyY + p1;
-        var quedanY = verdictY + p1;
-        var tokensY = quedanY + p1 + secGap;
-        var peticY = tokensY + p2;
-        var cacheY = peticY + p2;
+        var y0 = hairY + sc(KV_TOP_GAP);
 
-        // Cabecera de marca: título + la ÚNICA hairline de la vista.
         dc.setColor(Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
-        dc.drawText(cx, titleY, Graphics.FONT_XTINY, "PROYECCIÓN",
+        dc.drawText(cx, titleY, Graphics.FONT_XTINY, title,
             Graphics.TEXT_JUSTIFY_CENTER);
         dc.setColor(Graphics.COLOR_DK_GRAY, Graphics.COLOR_TRANSPARENT);
         dc.drawLine(cx - sc(HAIR_HALF), hairY, cx + sc(HAIR_HALF), hairY);
 
-        var allowance = mState.allowance();
-        var used = mState.used();
+        // --- Cálculo.
+        var crW = windowSum(s, "cr", days);
+        var tkW = windowSum(s, "tk", days);
+        var rate = crW / days;                         // créditos / día
+        var ratio = (crW > 0.0) ? tkW / crW : null;    // tokens / crédito
 
-        // --- RITMO (créditos/día): used / días transcurridos del periodo.
-        // Sin period_start en la caché (caché vieja): 30 días y "~".
-        var ps = mState.periodStart();
-        var endDay = mState.periodDay();
-        var estRate = (ps == null);
-        var elapsedDays = 30;
-        if (!estRate) {
-            var diff = QuotaStore.nowEpoch() - ps;
-            elapsedDays = (diff < 0) ? 1 : diff / 86400;
-            if (elapsedDays < 1) {
-                elapsedDays = 1;            // periodo arrancado hoy: /1 día
+        var now = QuotaStore.nowEpoch();
+        var endDay = st.periodDay();
+        var daysLeft = 0.0;
+        if (endDay != null) {
+            daysLeft = (endDay * 86400 - now) / 86400.0;
+            if (daysLeft < 0.0) {
+                daysLeft = 0.0;
             }
         }
-        var rate = used * 1.0 / elapsedDays;
-
-        // --- PROYECCIÓN a fin de periodo: ritmo x días TOTALES del periodo
-        // (period_end - period_start; con period_start ausente, 30 días).
-        var totalDays = 30;
-        if (!estRate && endDay != null) {
-            totalDays = endDay - ps / 86400;
-            if (totalDays < 1) {
-                totalDays = 1;
-            }
+        var allowance = st.allowance();
+        var used = st.used();
+        var left = st.remaining();
+        if (left == null) {
+            left = allowance - used;
         }
-        var projection = rate * totalDays;
+        if (left < 0.0) {
+            left = 0.0;
+        }
+        var projection = used + rate * daysLeft;
 
-        var ritmoTxt = (estRate ? "~" : "") + QuotaStore.creditLabel(rate) + "/d";
-        var proyTxt = QuotaStore.creditLabel(projection);
-
-        // --- Veredicto: > allowance -> TE PASARÁS (rojo, con el exceso);
-        // < 80 % -> VAS BIEN (verde); si no -> JUSTO (ámbar).
-        var verdict;
-        var vColor;
-        if (allowance == null || allowance <= 0.0) {
-            verdict = "—";
-            vColor = Graphics.COLOR_LT_GRAY;
-        } else if (projection > allowance) {
-            verdict = "TE PASARÁS +"
-                + QuotaStore.creditLabel(projection - allowance);
+        var verdict = "—";                   // sin allowance no hay veredicto
+        var vColor = Graphics.COLOR_LT_GRAY;
+        if (allowance > 0.0 && projection > allowance) {
+            verdict = "TE PASARÁS +" + fmtAmount(projection - allowance, ratio);
             vColor = Graphics.COLOR_RED;
-        } else if (projection < allowance * 0.8) {
+        } else if (allowance > 0.0 && projection < allowance * 0.8) {
             verdict = "VAS BIEN";
             vColor = Graphics.COLOR_GREEN;
-        } else {
+        } else if (allowance > 0.0) {
             verdict = "JUSTO";
             vColor = Graphics.COLOR_YELLOW;
         }
 
-        // --- QUEDAN: días hasta el reset + créditos restantes del periodo
-        // (remaining de la API, o allowance - used si la API no lo trae).
-        var days = QuotaStore.daysUntilReset(endDay);
-        if (days != null && days < 0) {
-            days = 0;                       // fecha pasada -> 0, nunca "-3 D"
-        }
-        var credLeft = mState.remaining();
-        if (credLeft == null) {
-            credLeft = allowance - used;
-        }
-        var credTxt = QuotaStore.creditLabel(credLeft);
-        var dTxt = (days == null) ? null : days + " D";
-        var quedanW = dc.getTextWidthInPixels(credTxt, Graphics.FONT_XTINY);
-        if (dTxt != null) {
-            quedanW += dc.getTextWidthInPixels(dTxt + " · ", Graphics.FONT_XTINY);
+        // SE AGOTA: saldo / ritmo, si cae antes del reset.
+        var agota = "NO";
+        var aColor = Graphics.COLOR_GREEN;
+        if (rate > 0.0 && left / rate < daysLeft) {
+            var dEx = left / rate;
+            agota = (dEx < 1.0)
+                ? "EN " + (dEx * 24.0).toNumber() + " H"
+                : "EN " + dEx.toNumber() + " D";
+            aColor = Graphics.COLOR_RED;
         }
 
-        // --- Conteos de la VENTANA (30 días). Dato ausente -> "—".
-        var tokTxt = QuotaStore.tokenLabel(mState.totTokens());
-        var reqTxt = QuotaStore.tokenLabel(mState.totRequests());
-        var cacheTxt = "—";
-        if (mState.totTokens() != null && mState.totCached() != null
-                && mState.totTokens() > 0) {
-            var pct = (mState.totCached() * 1.0 / mState.totTokens() * 100.0
-                + 0.5).toNumber();
-            if (pct < 0) {
-                pct = 0;
-            }
-            if (pct > 100) {
-                pct = 100;
-            }
-            cacheTxt = pct + "%";
+        var dReset = QuotaStore.daysUntilReset(endDay);
+        if (dReset != null && dReset < 0) {
+            dReset = 0;
         }
+        var dTxt = (dReset == null) ? null : dReset + " D";
 
-        // --- Eje de la tabla: etiquetas a la derecha contra gx - g, valores
-        // a la izquierda desde gx + g. El eje se desplaza para CENTRAR el
-        // bloque (etiqueta más ancha + valor más ancho) en la pantalla.
-        var labels = ["RITMO", "PROYECCIÓN", "QUEDAN", "TOKENS", "PETICIONES",
-            "CACHÉ"];
-        var values = [ritmoTxt, proyTxt, tokTxt, reqTxt, cacheTxt];
+        // RITMO en tokens es EXACTO (tokens reales de la ventana / días);
+        // el resto en tokens es equivalencia (~).
+        var ritmoTxt = mTok
+            ? QuotaStore.tokenLabel(tkW / days) + " tok/d"
+            : QuotaStore.creditLabel(rate) + " cr/d";
+        var proyTxt = fmtAmount(projection, ratio);
+        var leftTxt = fmtAmount(left, ratio);
+
+        // --- Eje de la tabla centrado (etiqueta más ancha + valor más ancho).
+        var labels = ["RITMO", "PROYECCIÓN", "QUEDAN", "SE AGOTA"];
         var maxL = 0;
         for (var i = 0; i < labels.size(); i++) {
             var lw = dc.getTextWidthInPixels(labels[i] as Lang.String, Graphics.FONT_XTINY);
@@ -705,83 +731,202 @@ class NaNUsageBreakdownView extends WatchUi.View {
                 maxL = lw;
             }
         }
+        var quedanW = dc.getTextWidthInPixels(leftTxt, Graphics.FONT_XTINY);
+        if (dTxt != null) {
+            quedanW += dc.getTextWidthInPixels(dTxt + " · ", Graphics.FONT_XTINY);
+        }
         var maxV = quedanW;
-        for (var i = 0; i < values.size(); i++) {
-            var vw = dc.getTextWidthInPixels(values[i] as Lang.String, Graphics.FONT_XTINY);
+        var vals = [ritmoTxt, proyTxt, agota];
+        for (var i = 0; i < vals.size(); i++) {
+            var vw = dc.getTextWidthInPixels(vals[i] as Lang.String, Graphics.FONT_XTINY);
+            if (vw > maxV) {
+                maxV = vw;
+            }
+        }
+        var gx = clampAxis(dc, cx, cx + (maxL - maxV) / 2, labels,
+            [y0, y0 + p, y0 + 3 * p, y0 + 4 * p]);
+
+        drawKV(dc, y0, gx, "RITMO", ritmoTxt, unitColor());
+        drawKV(dc, y0 + p, gx, "PROYECCIÓN", proyTxt, unitColor());
+
+        dc.setColor(vColor, Graphics.COLOR_TRANSPARENT);
+        dc.drawText(cx, y0 + 2 * p, Graphics.FONT_XTINY,
+            fitFlatIfNeeded(dc, verdict, 2 * chordHalf(dc, y0 + 2 * p)),
+            Graphics.TEXT_JUSTIFY_CENTER);
+
+        var qY = y0 + 3 * p;
+        drawKV(dc, qY, gx, "QUEDAN", "", Graphics.COLOR_WHITE);
+        var x = gx + sc1(KV_GUTTER);
+        if (dTxt != null) {
+            dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_TRANSPARENT);
+            dc.drawText(x, qY, Graphics.FONT_XTINY, dTxt, Graphics.TEXT_JUSTIFY_LEFT);
+            x += dc.getTextWidthInPixels(dTxt, Graphics.FONT_XTINY);
+            dc.setColor(Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
+            dc.drawText(x, qY, Graphics.FONT_XTINY, " · ", Graphics.TEXT_JUSTIFY_LEFT);
+            x += dc.getTextWidthInPixels(" · ", Graphics.FONT_XTINY);
+        }
+        dc.setColor(unitColor(), Graphics.COLOR_TRANSPARENT);
+        dc.drawText(x, qY, Graphics.FONT_XTINY, leftTxt, Graphics.TEXT_JUSTIFY_LEFT);
+
+        drawKV(dc, y0 + 4 * p, gx, "SE AGOTA", agota, aColor);
+
+        dc.setColor(Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
+        dc.drawText(cx, pY, Graphics.FONT_XTINY, footer, Graphics.TEXT_JUSTIFY_CENTER);
+    }
+
+    // -------------------------------------------------------------------------
+    // ACTIVIDAD · 7 D (5/5)
+    // -------------------------------------------------------------------------
+
+    //! Gráfica de barras de créditos por día (7 días, hoy en verde lima,
+    //! inicial del día UTC debajo) y conteos de la semana: PETICIONES,
+    //! TOK/PETICIÓN, CACHÉ (cached / prompt) y el HISTÓRICO de tokens.
+    private function drawActivity(dc as Graphics.Dc, cx as Lang.Number) as Void {
+        var title = "ACTIVIDAD · 7 D";
+        var s = QuotaStore.getSeries();
+        if (s == null) {
+            drawNoSeries(dc, cx, title, "5/5");
+            return;
+        }
+        var pY = pageY(dc);
+        var titleY = sc(TITLE_Y);
+        var hairY = titleY + mFh + sc(HAIR_GAP);
+
+        dc.setColor(Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
+        dc.drawText(cx, titleY, Graphics.FONT_XTINY, title,
+            Graphics.TEXT_JUSTIFY_CENTER);
+        dc.setColor(Graphics.COLOR_DK_GRAY, Graphics.COLOR_TRANSPARENT);
+        dc.drawLine(cx - sc(HAIR_HALF), hairY, cx + sc(HAIR_HALF), hairY);
+
+        // --- Barras: más antiguo a la izquierda, hoy a la derecha.
+        var chartTop = hairY + sc(6);
+        var chartH = sc(CHART_H);
+        var slot = sc(CHART_SLOT);
+        var barW = slot - sc1(5);
+        var x0 = cx - (7 * slot) / 2;
+        var maxC = 0.0;
+        for (var b = 0; b < 7; b++) {
+            var v = dayVal(s, "cr", b);
+            if (v > maxC) {
+                maxC = v;
+            }
+        }
+        var today = QuotaStore.nowEpoch() / 86400;
+        var letters = ["D", "L", "M", "X", "J", "V", "S"];
+        for (var i = 0; i < 7; i++) {
+            var back = 6 - i;
+            var bx = x0 + i * slot + (slot - barW) / 2;
+            dc.setColor(Graphics.COLOR_DK_GRAY, Graphics.COLOR_TRANSPARENT);
+            dc.fillRectangle(bx, chartTop, barW, chartH);
+            var v = dayVal(s, "cr", back);
+            if (maxC > 0.0 && v > 0.0) {
+                var bh = (chartH * v / maxC).toNumber();
+                if (bh < 1) {
+                    bh = 1;
+                }
+                dc.setColor((back == 0) ? Graphics.COLOR_GREEN : BAR_COLOR,
+                    Graphics.COLOR_TRANSPARENT);
+                dc.fillRectangle(bx, chartTop + chartH - bh, barW, bh);
+            }
+            dc.setColor((back == 0) ? Graphics.COLOR_WHITE : Graphics.COLOR_LT_GRAY,
+                Graphics.COLOR_TRANSPARENT);
+            dc.drawText(bx + barW / 2, chartTop + chartH + sc1(1), Graphics.FONT_XTINY,
+                letters[(today - back + 4) % 7], Graphics.TEXT_JUSTIFY_CENTER);
+        }
+
+        // --- Conteos de la semana (7 días: hoy parcial + 6 completos).
+        var rq = 0.0;
+        var tk = 0.0;
+        var ca = 0.0;
+        var pt = 0.0;
+        for (var b = 0; b < 7; b++) {
+            rq += dayVal(s, "rq", b);
+            tk += dayVal(s, "tk", b);
+            ca += dayVal(s, "ca", b);
+            pt += dayVal(s, "pt", b);
+        }
+        var reqTxt = QuotaStore.tokenLabel(rq);
+        var perTxt = (rq > 0.0) ? QuotaStore.tokenLabel(tk / rq) + " tok" : "—";
+        var cacheTxt = "—";
+        if (pt > 0.0) {
+            var pct = (ca * 100.0 / pt + 0.5).toNumber();
+            cacheTxt = ((pct > 100) ? 100 : pct) + "%";
+        }
+        var at = QuotaStore.getAllTimeTokens();
+        var atTxt = QuotaStore.isNumeric(at) ? QuotaStore.tokenLabel(at) + " tok" : "—";
+
+        var labels = ["PETICIONES", "TOK/PET", "CACHÉ", "HISTÓRICO"];
+        var vals = [reqTxt, perTxt, cacheTxt, atTxt];
+        var colors = [Graphics.COLOR_WHITE, TOK_COLOR, Graphics.COLOR_WHITE, TOK_COLOR];
+        var p = sc(KV_PITCH_2);
+        if (p < mFh - 1) {
+            p = mFh - 1;
+        }
+        var y0 = chartTop + chartH + sc1(1) + mFh + sc(4);
+        if (y0 + 3 * p + mFh > pY - sc1(1)) {
+            p = (pY - sc1(1) - mFh - y0) / 3;
+            if (p < mCap + 4) {
+                p = mCap + 4;
+            }
+        }
+        var maxL = 0;
+        var maxV = 0;
+        for (var i = 0; i < labels.size(); i++) {
+            var lw = dc.getTextWidthInPixels(labels[i] as Lang.String, Graphics.FONT_XTINY);
+            var vw = dc.getTextWidthInPixels(vals[i] as Lang.String, Graphics.FONT_XTINY);
+            if (lw > maxL) {
+                maxL = lw;
+            }
             if (vw > maxV) {
                 maxV = vw;
             }
         }
         var gx = cx + (maxL - maxV) / 2;
-
-        drawKV(dc, ritmoY, gx, "RITMO", ritmoTxt, Graphics.COLOR_WHITE);
-        drawKV(dc, proyY, gx, "PROYECCIÓN", proyTxt, Graphics.COLOR_WHITE);
-
-        dc.setColor(vColor, Graphics.COLOR_TRANSPARENT);
-        dc.drawText(cx, verdictY, Graphics.FONT_XTINY, verdict,
-            Graphics.TEXT_JUSTIFY_CENTER);
-
-        drawKV(dc, quedanY, gx, "QUEDAN", "", Graphics.COLOR_WHITE);
-        var x = gx + sc1(KV_GUTTER);
-        if (dTxt != null) {
-            dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_TRANSPARENT);
-            dc.drawText(x, quedanY, Graphics.FONT_XTINY, dTxt,
-                Graphics.TEXT_JUSTIFY_LEFT);
-            x += dc.getTextWidthInPixels(dTxt, Graphics.FONT_XTINY);
-            dc.setColor(Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
-            dc.drawText(x, quedanY, Graphics.FONT_XTINY, " · ",
-                Graphics.TEXT_JUSTIFY_LEFT);
-            x += dc.getTextWidthInPixels(" · ", Graphics.FONT_XTINY);
-            dc.setColor(severityColor(mState.usedFraction()),
-                Graphics.COLOR_TRANSPARENT);
-        } else {
-            dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_TRANSPARENT);
+        var ys = [];
+        for (var i = 0; i < labels.size(); i++) {
+            ys.add(y0 + i * p);
         }
-        dc.drawText(x, quedanY, Graphics.FONT_XTINY, credTxt,
-            Graphics.TEXT_JUSTIFY_LEFT);
-
-        drawKV(dc, tokensY, gx, "TOKENS", tokTxt, Graphics.COLOR_WHITE);
-        // "PETICIONES" es la etiqueta más larga: si no cabe a su altura de
-        // la cuerda, sinónimo más corto en vez de recortar con "..".
-        var reqLabel = "PETICIONES";
-        if (gx - sc1(KV_GUTTER) - (cx - chordHalf(dc, peticY))
-                < dc.getTextWidthInPixels(reqLabel, Graphics.FONT_XTINY)) {
-            reqLabel = "LLAMADAS";
+        gx = clampAxis(dc, cx, gx, labels, ys);
+        for (var i = 0; i < labels.size(); i++) {
+            drawKV(dc, y0 + i * p, gx, labels[i] as Lang.String, vals[i] as Lang.String,
+                colors[i] as Graphics.ColorType);
         }
-        drawKV(dc, peticY, gx, reqLabel, reqTxt, Graphics.COLOR_WHITE);
-        drawKV(dc, cacheY, gx, "CACHÉ", cacheTxt, Graphics.COLOR_WHITE);
 
-        // Indicador de pantalla: 3/3.
         dc.setColor(Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
-        dc.drawText(cx, pY, Graphics.FONT_XTINY, "3/3",
-            Graphics.TEXT_JUSTIFY_CENTER);
+        dc.drawText(cx, pY, Graphics.FONT_XTINY, "5/5", Graphics.TEXT_JUSTIFY_CENTER);
     }
 
     // -------------------------------------------------------------------------
     // Navegación interna (llamadas del delegate)
     // -------------------------------------------------------------------------
 
-    //! DOWN (fr955: down -> nextPage): pagina el desglose; desde la ÚLTIMA
-    //! página pasa a PROYECCIÓN. Devuelve false sólo en proyección, donde
-    //! DOWN cierra el ciclo -> popView a la principal (el delegate lo hace).
+    //! DOWN: pagina el desglose; desde su ÚLTIMA página pasa a 24 H -> 7 D ->
+    //! ACTIVIDAD. Devuelve false sólo en ACTIVIDAD, donde DOWN cierra el
+    //! ciclo -> popView a la principal (el delegate lo hace).
     function onNextPressed() as Lang.Boolean {
-        if (mScreen == 1) {
-            return false;
-        }
-        if (mPage < pageCount() - 1) {
+        if (mScreen == 0 && mPage < pageCount() - 1) {
             mPage++;
             WatchUi.requestUpdate();
             return true;
         }
-        mScreen = 1;
+        if (mScreen >= LAST_SCREEN) {
+            return false;
+        }
+        mScreen++;
+        QuotaStore.ensureSeries(SERIES_TTL_S);
         WatchUi.requestUpdate();
         return true;
     }
 
-    //! UP (fr955: up -> previousPage): pagina el desglose; en la página 1
-    //! vuelve a la principal (popView). En proyección regresa al desglose
-    //! (última página, por donde se entró).
+    //! UP: retrocede de pantalla (24 H -> desglose por su última página) y
+    //! pagina el desglose; en su página 1 devuelve false -> principal.
     function onPrevPressed() as Lang.Boolean {
+        if (mScreen > 1) {
+            mScreen--;
+            QuotaStore.ensureSeries(SERIES_TTL_S);
+            WatchUi.requestUpdate();
+            return true;
+        }
         if (mScreen == 1) {
             mScreen = 0;
             mPage = pageCount() - 1;
@@ -827,8 +972,8 @@ class NaNUsageBreakdownView extends WatchUi.View {
         var base = label;
         var idx = label.find("-");
         if (idx != null && idx > 0) {
-            disc = label.substring(idx, label.length());
-            base = label.substring(0, idx);
+            disc = label.substring(idx, label.length()) as Lang.String;
+            base = label.substring(0, idx) as Lang.String;
         }
         var cut = base;
         while (cut.length() > 1
@@ -874,11 +1019,10 @@ class NaNUsageBreakdownView extends WatchUi.View {
     }
 }
 
-//! Delegate de las pantallas 2/3 y 3/3: BACK vuelve a la principal; DOWN/UP
-//! pagan el desglose y pasan de pantalla (última página -> proyección;
-//! proyección DOWN -> principal por el ciclo; desglose pág. 1 UP ->
-//! principal). SELECT se consume a propósito (aquí no hay acción: el
-//! refresco manual sigue siendo cosa de la vista principal).
+//! Delegate de las pantallas 2/5..5/5: BACK vuelve a la principal; DOWN/UP
+//! paginan el desglose y pasan de pantalla (actividad DOWN -> principal por
+//! el ciclo; desglose pág. 1 UP -> principal). SELECT (START) alterna
+//! créditos/tokens; el refresco manual sigue siendo cosa de la principal.
 class NaNUsageBreakdownDelegate extends WatchUi.BehaviorDelegate {
 
     function initialize() {
@@ -913,9 +1057,12 @@ class NaNUsageBreakdownDelegate extends WatchUi.BehaviorDelegate {
         return true;
     }
 
-    //! Consumido: aquí SELECT no refresca (evita que el ENTER dispare
-    //! acciones del sistema sobre esta vista pushed).
+    //! START: alterna créditos <-> tokens (la vista decide si aplica).
     function onSelect() as Lang.Boolean {
+        var v = currentView();
+        if (v != null) {
+            v.onSelectPressed();
+        }
         return true;
     }
 

@@ -36,10 +36,10 @@ using Toybox.Time;
 (:glance)
 class NaNUsageGlanceView extends WatchUi.GlanceView {
 
-    private var mWordmark;   //!< BitmapResource del wordmark, o null
-    private var mIsoMini;    //!< BitmapResource del isotipo mini, o null
-    private var mInset = 7; //!< inset lateral (px) de la caja de glance
-    private var mS = 1.0;    //!< escala = min(w/176, h/93) (caja de glance fr955)
+    private var mWordmark as Graphics.BitmapType or Null; //!< wordmark o null
+    private var mIsoMini as Graphics.BitmapType or Null;  //!< isotipo u null
+    private var mInset as Lang.Number = 7; //!< inset lateral (px) de la glance
+    private var mS as Lang.Float = 1.0;    //!< escala = min(w/176, h/93)
 
     //! Recalcula la escala desde la caja real de la glance (base 176x93).
     private function updateScale(dc as Graphics.Dc) as Void {
@@ -86,13 +86,18 @@ class NaNUsageGlanceView extends WatchUi.GlanceView {
     //! sólo enlaza código anotado (:glance) y QuotaStore no lo está). El
     //! parser de JSON/Storage puede entregar Number (int 32), Long (int 64),
     //! Float o Double según el origen del valor.
-    private function toFloat(v) as Lang.Float or Null {
-        if (v == null) {
-            return null;
+    private function toFloat(v as Lang.Object or Null) as Lang.Float or Null {
+        if (v instanceof Lang.Float) {
+            return v;
         }
-        if (v instanceof Lang.Float || v instanceof Lang.Double
-                || v instanceof Lang.Number || v instanceof Lang.Long) {
-            return v * 1.0;
+        if (v instanceof Lang.Double) {
+            return (v as Lang.Double).toFloat();
+        }
+        if (v instanceof Lang.Number) {
+            return (v as Lang.Number).toFloat();
+        }
+        if (v instanceof Lang.Long) {
+            return (v as Lang.Long).toFloat();
         }
         return null;
     }
@@ -100,7 +105,7 @@ class NaNUsageGlanceView extends WatchUi.GlanceView {
     //! Formato compacto de créditos (gemelo de QuotaStore.creditLabel, por el
     //! mismo motivo de enlazado): < 1000 -> entero ("320"); >= 1000 -> una
     //! decimal y "K" ("3.9K", "7.0K").
-    private function creditLabel(v as Lang.Float) as Lang.String {
+    private function creditLabel(v as Lang.Float or Null) as Lang.String {
         if (v == null) {
             return "?";
         }
@@ -168,8 +173,9 @@ class NaNUsageGlanceView extends WatchUi.GlanceView {
         var y0 = topPad();
 
         // Isotipo mini (bitmap oficial cuantizado, fallback con primitivas).
-        if (mIsoMini != null) {
-            dc.drawBitmap(pad, y0, mIsoMini);
+        var iso = mIsoMini;
+        if (iso != null) {
+            dc.drawBitmap(pad, y0, iso);
         } else {
             var cxI = pad + isoH / 2;
             var cyI = y0 + isoH / 2;
@@ -203,8 +209,9 @@ class NaNUsageGlanceView extends WatchUi.GlanceView {
 
         // Wordmark: bitmap blanco 96x15, o texto de sistema como fallback.
         var wx = pad + isoH + sc(4);
-        if (mWordmark != null) {
-            dc.drawBitmap(wx, y0 + (isoH - wmH) / 2, mWordmark);
+        var wm = mWordmark;
+        if (wm != null) {
+            dc.drawBitmap(wx, y0 + (isoH - wmH) / 2, wm);
         } else {
             var f = Graphics.FONT_GLANCE;
             if (dc.getTextWidthInPixels("naN.builders", f) > w - pad - wx) {
@@ -316,7 +323,7 @@ class NaNUsageGlanceView extends WatchUi.GlanceView {
                 Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
             return;
         }
-        var snap = raw as Lang.Dictionary;
+        var snap = raw as Lang.Dictionary<Lang.String, Lang.Object or Null>;
 
         // B4: null-safety total con instanceof (el cast "as" puede lanzar).
         // Héroe: used/allowance del PERIODO de facturación, el mismo dato que

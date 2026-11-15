@@ -60,11 +60,12 @@ using Toybox.Application.Properties;
 //! cubre la ventana y NO el periodo: no suman el héroe). El badge cuenta los
 //! días hasta period_end (o avisa "CUENTA CONGELADA").
 //!
-//! NAVEGACIÓN (3 pantallas): SELECT refresca (manual), BACK sale y DOWN abre
+//! NAVEGACIÓN (5 pantallas): SELECT refresca (manual), BACK sale y DOWN abre
 //! la pantalla de desglose por modelos (NaNUsageBreakdownView, pushed con su
-//! delegate); el ciclo completo es Principal -> Desglose -> Proyección ->
-//! Principal (UP retrocede; detalles en el delegate del desglose). Esta
-//! pantalla es la "1/3" del indicador discreto bajo el arco. SIN API key,
+//! delegate); el ciclo completo es Principal -> Desglose (paginado) -> 24 H ->
+//! 7 D -> Actividad -> Principal (UP retrocede; detalles en el delegate del
+//! desglose). Esta pantalla es la "1/5" del indicador discreto bajo el arco.
+//! SIN API key,
 //! SELECT abre el editor de texto del reloj y MENU lo abre siempre (cambiar
 //! la key en apps instaladas por USB, sin editor de ajustes de Garmin).
 class NaNUsageView extends WatchUi.View {
@@ -77,10 +78,17 @@ class NaNUsageView extends WatchUi.View {
 
     // --- geometría de la piel (mockup aprobado) ---
     private const WM_W = 96;            // ancho del wordmark (x 82..178)
-    private const WM_Y = 40;            // top del wordmark (centrado en y~48)
-    private const HAIR_Y = 60;          // hairline 1px bajo el wordmark
-    private const HERO_BASE = 133;      // línea base del héroe (glifos hasta aquí)
-    private const SUB_Y = 134;          // top del subtítulo
+    private const WM_Y = 38;            // top del wordmark (centrado en y~48)
+    private const HAIR_Y = 58;          // hairline 1px bajo el wordmark
+    // El héroe se coloca por la TINTA de sus dígitos, no por una Y fija: la
+    // fuente de números del sistema (FONT_NUMBER_MEDIUM; la vectorial no
+    // existe en estos modelos) pone los dígitos a distinta altura en cada
+    // reloj (medido: hairline->tinta 18 px en fr955 vs 11 en fenix7 con la
+    // misma base). Tinta = HAIR_Y + HERO_GAP; base = tinta + 0,74 x ascent
+    // (alto de dígito medido: 0,66-0,77 x ascent según modelo). El subtítulo
+    // y todo lo de debajo cuelgan de esa base (mSubY).
+    private const HERO_GAP = 7;         // hairline -> tinta de los dígitos
+    private const DIGIT_K = 0.74;       // alto de dígito / ascent
     // BUG subtítulo (fr955 real, foto): la degradación usaba un techo FIJO de
     // 250 px sin relación con la geometría y con margen 3 el texto tocaba el
     // cristal. Ahora el presupuesto es la CUERDA ÚTIL real (subAvailWidth()):
@@ -105,11 +113,12 @@ class NaNUsageView extends WatchUi.View {
                                         // 240 las esquinas quedan a r ~= 127.8
                                         // < 130, dentro del círculo
     // FIX solape (foto fr955 260x260): FONT_XTINY mide 21 px en el fr955
-    // (height 21 / ascent 17, simulator.json), así que el subtítulo dibujado
-    // en SUB_Y=134 ocupa hasta y=155 y un badge fijo en y=146 le pisaba la
-    // mitad inferior. El badge ahora se ancla MEDIANTE getFontHeight() en
-    // drawBadge(): badgeY = SUB_Y + hXTINY + 2 -> 157..174 (margen real de
-    // 2 px bajo el subtítulo). Las filas y el isotipo se re-flujan abajo.
+    // (height 21 / ascent 17, simulator.json). El subtítulo ya NO cuelga de
+    // una Y fija: drawHero() fija mSubY desde la TINTA real de los dígitos y
+    // el badge se ancla MEDIANTE getFontHeight() en drawBadge(): badgeY =
+    // mSubY + hXTINY + 2 (en fr955, 157..174: margen real de 2 px bajo el
+    // subtítulo, que ocupa 134..155). Las filas y el isotipo se re-flujan
+    // abajo.
     // FIX solape filas (foto fr970 454x454, y también 2-3 px en fr955): con
     // un paso fijo de 17 la barra de cada fila (base+5..+7) pisaba la tinta
     // de las mayúsculas de la fila siguiente. Ahora la geometría sale de las
@@ -123,15 +132,16 @@ class NaNUsageView extends WatchUi.View {
     private const ROW_HALF = 66;        // filas de x=cx-66 a x=cx+66 (64..196)
     private const BAR_H = 3;            // barra de consumo (alto 3)
     private const ISO_SIZE = 16;        // isotipo mini 16x16
+    private const ISO_FLOOR = 6;        // isotipo -> borde inferior (mín.; 260: 9 real)
     private const ISO_GAP = 2;          // barra de la fila 3 -> isotipo
                                         // (fr955: 236..252; esquina (138,252):
                                         // r=122.3 < 129 del centro)
-    private const MAX_ROWS = 3;
+    private const MAX_ROWS = 4;               // los 20 px ganados = 1 fila (paso 19 en 260x260)
 
     // Política de refresco (batería primero): CERO red en background (sin
     // Timer ni Temporal Events). El fetch ocurre SOLO al abrir la vista o con
     // SELECT; REFRESH_MS desaparece porque ya no hay refresco por tiempo.
-    private const ANTI_BOUNCE_MS = 30000;   // no re-fetch automático antes de 30 s
+    private const ANTI_BOUNCE_S = 300;      // s (epoch): no re-fetch al abrir antes de 5 min (START fuerza)
     private const SYNC_TIMEOUT_MS = 20000;  // suelo mínimo entre intentos (en vuelo)
 
     //! Sentido de dibujo del anillo. Si el firmware interpretara las etiquetas
@@ -139,17 +149,18 @@ class NaNUsageView extends WatchUi.View {
     //! a drawArc se adaptan solas.
     private const ARC_DIRECTION = Graphics.ARC_CLOCKWISE;
 
-    private var mState;        //!< CreditState (instantánea de créditos) or null
-    private var mError;        //!< String or null
-    private var mSyncing;      //!< true while a request is in flight
-    private var mSyncStartMs;  //!< System.getTimer() when the last sync started
-    private var mHeroFont;     //!< font for the hero number (VectorFont or resource)
-    private var mPctFont;      //!< font for the "%" after the hero number
-    private var mWmFontA;      //!< fallback vectorial del wordmark: "naN"
-    private var mWmFontB;      //!< fallback vectorial del wordmark: ".builders"
-    private var mWordmark;     //!< BitmapResource del wordmark oficial, o null
-    private var mIsoMini;      //!< BitmapResource del isotipo mini, o null
-    private var mS = 1.0;      //!< factor de escala = min(w, h) / 260.0
+    private var mState as CreditState or Null; //!< instantánea de créditos
+    private var mError as Lang.String or Null; //!< aviso del último intento
+    private var mSyncing as Lang.Boolean = false;   //!< petición en vuelo
+    private var mSyncStartMs as Lang.Number = 0;    //!< getTimer() del inicio
+    private var mHeroFont as Graphics.FontType or Null; //!< fuente del héroe
+    private var mPctFont as Graphics.FontType or Null;  //!< fuente del "%"
+    private var mWmFontA as Graphics.FontType or Null;  //!< wordmark: "naN"
+    private var mWmFontB as Graphics.FontType or Null;  //!< wordmark: ".builders"
+    private var mWordmark as Graphics.BitmapType or Null; //!< wordmark oficial
+    private var mIsoMini as Graphics.BitmapType or Null;  //!< isotipo mini
+    private var mS as Lang.Float = 1.0; //!< factor de escala = min(w, h) / 260.0
+    private var mSubY as Lang.Number = 108; //!< top del subtítulo (lo fija drawHero)
 
     //! Recalcula el factor de escala desde el Dc (base de diseño 260x260).
     //! Si cambia, descarta las fuentes vectoriales cacheadas.
@@ -182,7 +193,7 @@ class NaNUsageView extends WatchUi.View {
 
     //! Dibuja un bitmap de diseño wxh escalado (drawBitmap nativo si s=1).
     private function drawBmp(dc as Graphics.Dc, x as Lang.Number, y as Lang.Number,
-            bw as Lang.Number, bh as Lang.Number, bmp) as Void {
+            bw as Lang.Number, bh as Lang.Number, bmp as Graphics.BitmapType) as Void {
         if (mS != 1.0 && (dc has :drawScaledBitmap)) {
             dc.drawScaledBitmap(x, y, sc(bw), sc(bh), bmp);
         } else {
@@ -204,12 +215,12 @@ class NaNUsageView extends WatchUi.View {
         mWmFontB = null;
         // Assets de marca declarados en resources/drawables/drawables.xml.
         try {
-            mWordmark = WatchUi.loadResource(Rez.Drawables.Wordmark);
+            mWordmark = WatchUi.loadResource(Rez.Drawables.Wordmark) as Graphics.BitmapType;
         } catch (e) {
             mWordmark = null;
         }
         try {
-            mIsoMini = WatchUi.loadResource(Rez.Drawables.IsotipoMini);
+            mIsoMini = WatchUi.loadResource(Rez.Drawables.IsotipoMini) as Graphics.BitmapType;
         } catch (e) {
             mIsoMini = null;
         }
@@ -217,7 +228,7 @@ class NaNUsageView extends WatchUi.View {
 
     function onShow() {
         // Política de refresco (batería primero): fetch SIEMPRE al abrir,
-        // salvo anti-rebote de ANTI_BOUNCE_MS desde el último INTENTO (éxito o
+        // salvo anti-rebote de ANTI_BOUNCE_S desde el último INTENTO (éxito o
         // fallo -> backoff de 30 s tras un fallo). SYNC_TIMEOUT_MS se conserva
         // como suelo mínimo entre intentos mientras una petición sigue en
         // vuelo (guard anti-doble-disparo de sync()). B1: edades en epoch de
@@ -228,7 +239,7 @@ class NaNUsageView extends WatchUi.View {
         var lastFetch = QuotaStore.getLastFetchEpoch();
         var lastAttempt = QuotaStore.getLastAttemptEpoch();
         var diff = now - lastFetch;
-        if (mState == null || lastFetch == 0 || diff < 0 || now - lastAttempt > ANTI_BOUNCE_MS) {
+        if (mState == null || lastFetch == 0 || diff < 0 || now - lastAttempt > ANTI_BOUNCE_S) {
             sync();
         }
     }
@@ -236,7 +247,7 @@ class NaNUsageView extends WatchUi.View {
     //! Kicks off a network refresh; results come back into onSyncDone().
     //! onShow() llega aquí tras el anti-rebote; SELECT llega vía forceSync()
     //! (bypass del anti-rebote) y sólo respeta el guard de SYNC_TIMEOUT_MS.
-    function sync() {
+    function sync() as Void {
         var now = System.getTimer();
         if (mSyncing) {
             // Una petición vieja (callback perdido) no debe bloquear el widget.
@@ -254,7 +265,7 @@ class NaNUsageView extends WatchUi.View {
     //! Refresco MANUAL (SELECT): fuerza el fetch bypassando el anti-rebote de
     //! onShow() (política punto 4). Sólo respeta el suelo mínimo de
     //! SYNC_TIMEOUT_MS mientras una petición sigue en vuelo.
-    function forceSync() {
+    function forceSync() as Void {
         sync();
     }
 
@@ -318,21 +329,22 @@ class NaNUsageView extends WatchUi.View {
         var cy = h / 2;
 
         // Sin caché: estado vacío / error / sincronizando, centrado de verdad.
-        if (mState == null) {
+        var st = mState;
+        if (st == null) {
             drawEmptyState(dc, cx, cy);
             return;
         }
 
         // Héroe, arco y semáforo: créditos usados / allowance del periodo.
-        var frac = mState.usedFraction();
+        var frac = st.usedFraction();
 
         drawRing(dc, cx, cy, frac);
         drawHeader(dc, cx);
         drawHero(dc, cx, frac);
         drawSubtitle(dc, cx);
         drawBadge(dc, cx,
-            QuotaStore.daysUntilReset(mState.periodDay()),
-            mState.frozen() == true);
+            QuotaStore.daysUntilReset(st.periodDay()),
+            st.frozen() == true);
         drawRows(dc, cx);
         drawIsoMini(dc, cx);
         drawScreenIndicator(dc, cx);
@@ -435,9 +447,10 @@ class NaNUsageView extends WatchUi.View {
     // Cabecera de marca: wordmark + hairline (patrón .sechead de la web)
     // -------------------------------------------------------------------------
     private function drawHeader(dc as Graphics.Dc, cx as Lang.Number) as Void {
-        if (mWordmark != null) {
+        var wm = mWordmark;
+        if (wm != null) {
             // Wordmark oficial rasterizado (96x15, blanco sobre negro).
-            drawBmp(dc, cx - sc(WM_W) / 2, sc(WM_Y), WM_W, 15, mWordmark);
+            drawBmp(dc, cx - sc(WM_W) / 2, sc(WM_Y), WM_W, 15, wm);
         } else {
             // Fallback vectorial: "naN" en Roboto-Black + ".builders" en
             // RobotoCondensed-RegularItalic (caras verificadas en el fr955).
@@ -458,34 +471,31 @@ class NaNUsageView extends WatchUi.View {
 
     //! Héroe: "45" en Roboto-Black 62 blanco + "%" en un SEGUNDO drawText de
     //! 26 px en COLOR_PURPLE (nunca dos colores en una misma llamada).
-    //! La base de los glifos queda en HERO_BASE (133), justo sobre el subtítulo.
+    //! Base de los glifos calculada desde la hairline (ver HERO_GAP); fija
+    //! mSubY, del que cuelgan subtítulo, badge y filas.
     private function drawHero(dc as Graphics.Dc, cx as Lang.Number, frac as Lang.Float) as Void {
         var pct = (frac * 100.0).toNumber();
         var num = pct.toString();
 
         var hf = heroFont();
         var pf = pctFont();
-        var hh = dc.getFontHeight(hf);
-        var ph = dc.getFontHeight(pf);
+        var asc = Graphics.getFontAscent(hf);
         var numW = dc.getTextWidthInPixels(num, hf);
         var pctW = dc.getTextWidthInPixels("%", pf);
 
         var gap = sc(2);
         var totalW = numW + gap + pctW;
         var x = cx - totalW / 2;
-        var heroBase = sc(HERO_BASE);
-
-        // Sin acceso a la ascendente real de una fuente vectorial, la top se
-        // deriva de la línea base con la misma proporción que el resto del
-        // código (ascendente ~= 0.78 * altura de la fuente).
-        var numTop = heroBase - (0.78 * hh).toNumber();
+        var heroBase = sc(HAIR_Y) + sc(HERO_GAP) + (DIGIT_K * asc + 0.5).toNumber();
+        mSubY = heroBase + sc(1);
+        var numTop = heroBase - asc;
 
         dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_TRANSPARENT);
         dc.drawText(x, numTop, hf, num, Graphics.TEXT_JUSTIFY_LEFT);
 
         // "%" alineado por la línea de base con el número grande.
         dc.setColor(Graphics.COLOR_PURPLE, Graphics.COLOR_TRANSPARENT);
-        dc.drawText(x + numW + gap, heroBase - (0.78 * ph).toNumber(), pf, "%",
+        dc.drawText(x + numW + gap, heroBase - Graphics.getFontAscent(pf), pf, "%",
             Graphics.TEXT_JUSTIFY_LEFT);
     }
 
@@ -513,8 +523,12 @@ class NaNUsageView extends WatchUi.View {
     //! baja de fuente ANTES de recortar cifras y como defensa final se
     //! recorta con ".." para que JAMÁS desborde el círculo.
     private function drawSubtitle(dc as Graphics.Dc, cx as Lang.Number) as Void {
-        var uTxt = QuotaStore.creditLabel(mState.used());
-        var aTxt = QuotaStore.creditLabel(mState.allowance());
+        var st = mState;
+        if (st == null) {
+            return;                       // drawSubtitle sólo corre con caché
+        }
+        var uTxt = QuotaStore.creditLabel(st.used());
+        var aTxt = QuotaStore.creditLabel(st.allowance());
         var erring = QuotaStore.getLastErr() != null;
         // B3: el aviso ámbar se decide por el último intento PERSISTIDO
         // (QuotaStore.getLastErr()), no sólo por el error en memoria de esta
@@ -528,7 +542,7 @@ class NaNUsageView extends WatchUi.View {
         if (mSyncing) {
             suffix = " · actualizando...";
         } else {
-            var extra = mState.models().size() - MAX_ROWS;
+            var extra = st.models().size() - rowSlots(dc);
             if (extra > 0) {
                 suffix = " · +" + extra;
             }
@@ -561,8 +575,9 @@ class NaNUsageView extends WatchUi.View {
         // El PRIMERO que quepa en la cuerda REAL, midiendo cada candidato
         // completo (por cada fuente, la cadena de degradación; el sufijo ya
         // va horneado, así que lo elegido es exactamente lo que se pinta).
-        var opts = erring ? [e0, e0s, e1, "sin conexion"] : [f0, f1, f2, f2s, f3];
-        var txt = null;
+        var opts = ((erring ? [e0, e0s, e1, "sin conexion"]
+            : [f0, f1, f2, f2s, f3]) as Lang.Array<Lang.String>);
+        var txt = null as Lang.String or Null;
         var font = fonts[0];
         for (var fi = 0; fi < fonts.size() && txt == null; fi++) {
             var availF = subAvailWidth(dc, fonts[fi]);
@@ -586,17 +601,17 @@ class NaNUsageView extends WatchUi.View {
         }
 
         dc.setColor(color, Graphics.COLOR_TRANSPARENT);
-        dc.drawText(cx, sc(SUB_Y), font, txt, Graphics.TEXT_JUSTIFY_CENTER);
+        dc.drawText(cx, mSubY, font, txt, Graphics.TEXT_JUSTIFY_CENTER);
     }
 
     //! Cuerda ÚTIL del círculo para el renglón del subtítulo (fr955 redondo
-    //! 260x260, centro (w/2, h/2), franja [SUB_Y, SUB_Y + altura de fuente]).
+    //! 260x260, centro (w/2, h/2), franja [mSubY, mSubY + altura de fuente]).
     //! Dos restrictores:
     //!   1. EL CRISTAL: rSafe_cristal = w/2 - SUB_MARGIN (= 120, margen >= 10)
     //!   2. EL ARCO DE MARCA: sus lados (r = ARC_R = 112, plumín 10 -> borde
     //!      interior 107) cruzan la franja del subtítulo; el texto debe caber
     //!      ENTRE ellos: rSafe_arco = ARC_R - ARC_PEN/2 - ARC_CLEAR = 104.
-    //!   rSafe = min(120, 104) = 104; dy = max(|SUB_Y-cy|, |SUB_Y+fontH-cy|)
+    //!   rSafe = min(120, 104) = 104; dy = max(|mSubY-cy|, |mSubY+fontH-cy|)
     //!   avail = 2 * sqrt(rSafe^2 - dy^2)  = 2*sqrt(104^2 - 25^2) = 201 px
     //!
     //! Verificación aritmética con las medidas REALES del simulador fr955
@@ -612,11 +627,11 @@ class NaNUsageView extends WatchUi.View {
         var rGlass = dc.getWidth() / 2 - sc(SUB_MARGIN);
         var rArc = sc(ARC_R) - sc1(ARC_PEN) / 2 - sc(ARC_CLEAR);
         var rSafe = (rGlass < rArc) ? rGlass : rArc;
-        var dyT = sc(SUB_Y) - cy;
+        var dyT = mSubY - cy;
         if (dyT < 0) {
             dyT = -dyT;
         }
-        var dyB = sc(SUB_Y) + dc.getFontHeight(font) - cy;
+        var dyB = mSubY + dc.getFontHeight(font) - cy;
         if (dyB < 0) {
             dyB = -dyB;
         }
@@ -643,7 +658,7 @@ class NaNUsageView extends WatchUi.View {
     //! -> "20 D") en lugar de desbordar; la Y anclada a la fuente no cambia.
     //! Bottom del badge (y + alto): ancla de las filas.
     private function badgeBottom(dc as Graphics.Dc) as Lang.Number {
-        return sc(SUB_Y) + dc.getFontHeight(Graphics.FONT_XTINY) + sc(2)
+        return mSubY + dc.getFontHeight(Graphics.FONT_XTINY) + sc(2)
             + sc(BADGE_H);
     }
 
@@ -664,20 +679,39 @@ class NaNUsageView extends WatchUi.View {
         return badgeBottom(dc) + sc(ROW_TOP_GAP) + capHeight(dc) + i * rowPitch(dc);
     }
 
-    //! Top del isotipo: bajo la barra de la ÚLTIMA fila posible (posición
-    //! fija aunque haya menos de 3 modelos).
-    private function isoY(dc as Graphics.Dc) as Lang.Number {
-        return rowBase(dc, MAX_ROWS - 1) + sc1(ROW_BAR_GAP) + sc1(BAR_H) + sc(ISO_GAP);
+    //! Top del isotipo si hubiera `n` filas: bajo la barra de la fila n.
+    private function isoYFor(dc as Graphics.Dc, n as Lang.Number) as Lang.Number {
+        return rowBase(dc, n - 1) + sc1(ROW_BAR_GAP) + sc1(BAR_H) + sc(ISO_GAP);
     }
 
-    private function drawBadge(dc as Graphics.Dc, cx as Lang.Number, days, frozen as Lang.Boolean) as Void {
+    //! Filas que caben: hasta MAX_ROWS (4) mientras el isotipo bajo la
+    //! última quede a >= ISO_FLOOR px del borde inferior; si no, una menos
+    //! (fuentes de mapa de bits más altas que la escala, p. ej. 240x240).
+    //! 260x260: 4 filas, isotipo 235..251 (antes 3 filas, 236..252).
+    private function rowSlots(dc as Graphics.Dc) as Lang.Number {
+        var limit = dc.getHeight() - sc(ISO_FLOOR) - sc(ISO_SIZE);
+        var n = MAX_ROWS;
+        while (n > 3 && isoYFor(dc, n) > limit) {
+            n--;
+        }
+        return n;
+    }
+
+    //! Top del isotipo: bajo la barra de la ÚLTIMA fila posible (posición
+    //! fija aunque haya menos modelos).
+    private function isoY(dc as Graphics.Dc) as Lang.Number {
+        return isoYFor(dc, rowSlots(dc));
+    }
+
+    private function drawBadge(dc as Graphics.Dc, cx as Lang.Number,
+            days as Lang.Number or Null, frozen as Lang.Boolean) as Void {
         // Anclaje vertical común (FIX solape): margen real bajo el subtítulo,
         // midiendo la fuente en lugar de una Y fija (FONT_XTINY = 21 px en
         // fr955 -> subtítulo 134..155, badge en 157..174).
         var badgeH = sc(BADGE_H);
         var badgePad = sc(BADGE_PAD);
         var badgeMaxW = sc(BADGE_MAX_W);
-        var y = sc(SUB_Y) + dc.getFontHeight(Graphics.FONT_XTINY) + sc(2);
+        var y = mSubY + dc.getFontHeight(Graphics.FONT_XTINY) + sc(2);
         var ty = y + (badgeH - dc.getFontHeight(Graphics.FONT_XTINY)) / 2;
 
         if (frozen) {
@@ -691,14 +725,12 @@ class NaNUsageView extends WatchUi.View {
             return;
         }
 
-        var label;
-        if (days == null) {
-            label = "SIN PERIODO";
-        } else {
+        var label = "SIN PERIODO";
+        if (days != null) {
             if (days < 0) {
                 days = 0;   // fecha pasada -> se muestra 0, nunca "-3 D"
             }
-            label = "RESET EN " + days + " D";
+            label = "RESET EN " + days.toString() + " D";
         }
 
         // BUG 2: ancho medido, no constante. El texto manda sobre la caja;
@@ -706,10 +738,10 @@ class NaNUsageView extends WatchUi.View {
         // y más baja del badge, ver la constante) y si lo excede se abrevia.
         var wBox = dc.getTextWidthInPixels(label, Graphics.FONT_XTINY) + 2 * badgePad;
         if (wBox > badgeMaxW && days != null) {
-            label = "RESET · " + days + " D";           // 1er acorte
+            label = "RESET · " + days.toString() + " D"; // 1er acorte
             wBox = dc.getTextWidthInPixels(label, Graphics.FONT_XTINY) + 2 * badgePad;
             if (wBox > badgeMaxW) {
-                label = "" + days + " D";                // 2º acorte: lo esencial
+                label = days.toString() + " D";          // 2º acorte: lo esencial
                 wBox = dc.getTextWidthInPixels(label, Graphics.FONT_XTINY) + 2 * badgePad;
             }
         }
@@ -736,22 +768,32 @@ class NaNUsageView extends WatchUi.View {
     // en COLOR_PURPLE (nada de semáforo ni arcoíris en las filas).
     // -------------------------------------------------------------------------
     private function drawRows(dc as Graphics.Dc, cx as Lang.Number) as Void {
-        var models = mState.models();
+        var st = mState;
+        if (st == null) {
+            return;
+        }
+        var models = st.models();
         var ascent = Graphics.getFontAscent(Graphics.FONT_XTINY);
         var rowHalf = sc(ROW_HALF);
         var left = cx - rowHalf;
         var right = cx + rowHalf;
 
-        for (var i = 0; i < MAX_ROWS && i < models.size(); i++) {
-            var m = models[i] as ModelCredit;
+        var slots = rowSlots(dc);
+        for (var i = 0; i < slots && i < models.size(); i++) {
+            var mV = models[i];
             // Modelo sin créditos o gratuito (credits <= 0): sin cifra no hay
             // fila en la vista principal (QuotaStore ya los filtra; guard
             // defensivo por si una lista llegara sin pasar por el filtro).
-            if (m == null || m.credits() == null || m.credits() <= 0.0) {
+            if (!(mV instanceof ModelCredit)) {
                 continue;
             }
-            var f = m.windowFraction(mState.windowTotal());
-            var creditTxt = QuotaStore.creditLabel(m.credits());
+            var m = mV as ModelCredit;
+            var c = m.credits();
+            if (c == null || c <= 0.0) {
+                continue;
+            }
+            var f = m.windowFraction(st.windowTotal());
+            var creditTxt = QuotaStore.creditLabel(c);
 
             var baseY = rowBase(dc, i);                     // 191 / 210 / 229
             var topY = baseY - ascent;
@@ -783,15 +825,15 @@ class NaNUsageView extends WatchUi.View {
         }
     }
 
-    //! Indicador DISCRETO de pantalla "1/3" (navegación de 3 pantallas):
+    //! Indicador DISCRETO de pantalla "1/5" (navegación de 5 pantallas):
     //! a la derecha del isotipo mini (que ocupa cx±8), en la banda del hueco
-    //! del arco. Con "1/3" de ~26 px: ink 140..166 x 238..251 -> esquina
+    //! del arco. Con "1/5" de ~26 px: ink 140..166 x 238..251 -> esquina
     //! (166, 251): dx=36, dy=121 -> r=127.7 < 130 (2 px al cristal) y sin
     //! tocar la barra de la fila 3 (231..233) ni el isotipo (borde cx+8).
     private function drawScreenIndicator(dc as Graphics.Dc, cx as Lang.Number) as Void {
         dc.setColor(Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
         dc.drawText(cx + sc(ISO_SIZE) / 2 + sc(2), isoY(dc) - sc(2), Graphics.FONT_XTINY,
-            "1/3", Graphics.TEXT_JUSTIFY_LEFT);
+            "1/5", Graphics.TEXT_JUSTIFY_LEFT);
     }
 
     //! Isotipo mini (16x16) centrado en el hueco del arco, bajo la última fila:
@@ -895,13 +937,14 @@ class NaNUsageView extends WatchUi.View {
     private function drawEmptyState(dc as Graphics.Dc, cx as Lang.Number, cy as Lang.Number) as Void {
         drawHeader(dc, cx);
 
-        var msg;
+        var msg = "Sin datos";
         var color = Graphics.COLOR_LT_GRAY;
-        if (mError != null) {
-            msg = mError;
+        var err = mError;
+        if (err != null) {
+            msg = err;
             color = Graphics.COLOR_YELLOW;
-        } else {
-            msg = mSyncing ? "Sincronizando..." : "Sin datos";
+        } else if (mSyncing) {
+            msg = "Sincronizando...";
         }
 
         // Msg medido contra la cuerda real: primero FONT_SMALL; si no cabe,
@@ -931,8 +974,8 @@ class NaNUsageView extends WatchUi.View {
         // Prioridad: sincronizando -> sin key -> key rechazada (401) ->
         // reintentar. "esperando al movil" (137) siempre cabe.
         var hasKey = QuotaStore.hasApiKey();
-        var hint;
-        var hintShort;
+        var hint = "pulsa SELECT para reintentar";
+        var hintShort = "SELECT para reintentar";
         if (mSyncing) {
             hint = "esperando al movil";
             hintShort = "esperando movil";
@@ -942,9 +985,6 @@ class NaNUsageView extends WatchUi.View {
         } else if (QuotaStore.hasAuthError()) {
             hint = "SELECT para corregir la key";
             hintShort = "SELECT: corregir key";
-        } else {
-            hint = "pulsa SELECT para reintentar";
-            hintShort = "SELECT para reintentar";
         }
         var fHint = Graphics.FONT_XTINY;
         var yHint = cy + sc(36);
@@ -1100,10 +1140,10 @@ class NaNUsageDelegate extends WatchUi.BehaviorDelegate {
         BehaviorDelegate.initialize();
     }
 
-    //! DOWN abre la PANTALLA 2/3 (desglose por modelos) como vista PUSHED con
+    //! DOWN abre la PANTALLA 2/5 (desglose por modelos) como vista PUSHED con
     //! su PROPIO delegate (NaNUsageBreakdownDelegate): mientras el desglose
     //! está encima, recibe él la entrada (DOWN/UP pagan y pasan a la pantalla
-    //! 3/3, Proyección; BACK vuelve aquí); al hacer BACK el control vuelve a
+    //! 3/5..5/5, proyecciones y actividad; BACK vuelve aquí); al hacer BACK el control vuelve a
     //! esta vista sin tocar el manejo de SELECT/BACK de la principal.
     //! Mapeo de teclas del fr955 (simulator.json): down -> nextPage. UP en la
     //! principal no tiene pantalla anterior: no se overridea (no-op).

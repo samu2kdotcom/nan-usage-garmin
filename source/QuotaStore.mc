@@ -4,6 +4,7 @@ using Toybox.Application.Properties;
 using Toybox.Communications;
 using Toybox.System;
 using Toybox.Time;
+using Toybox.WatchUi;
 
 //! Un modelo del desglose de créditos de la VENTANA DE 30 DÍAS
 //! (totals.by_model de GET /v1/usage?limit=1). Ya no hay topes de tokens:
@@ -18,14 +19,16 @@ using Toybox.Time;
 //! formato anterior o payload sin esas claves) y el display usa "—".
 class ModelCredit {
 
-    var mModel;      //!< p.ej. "glm5.3"
-    var mCredits;    //!< Float: créditos consumidos por el modelo en la ventana
-    var mTokens;     //!< Number/Long: total_tokens del modelo, o null si falta
-    var mRequests;   //!< Number/Long: api_requests del modelo, o null si falta
-    var mCached;     //!< Number/Long: cached_tokens del modelo, o null si falta
-    var mLabel;      //!< etiqueta corta ÚNICA de la lista (assignLabels)
+    var mModel as Lang.String;          //!< p.ej. "glm5.3"
+    var mCredits as Lang.Float or Null; //!< créditos del modelo en la ventana
+    var mTokens as Lang.Numeric or Null;   //!< total_tokens, o null si falta
+    var mRequests as Lang.Numeric or Null; //!< api_requests, o null si falta
+    var mCached as Lang.Numeric or Null;   //!< cached_tokens, o null si falta
+    var mLabel as Lang.String or Null;  //!< etiqueta corta ÚNICA (assignLabels)
 
-    function initialize(model, credits, tokens, requests, cached) {
+    function initialize(model as Lang.String, credits as Lang.Float or Null,
+            tokens as Lang.Numeric or Null, requests as Lang.Numeric or Null,
+            cached as Lang.Numeric or Null) {
         mModel = model;
         mCredits = credits;
         mTokens = tokens;
@@ -33,21 +36,23 @@ class ModelCredit {
         mCached = cached;
     }
 
-    function model() { return mModel; }
-    function credits() { return mCredits; }
-    function tokens() { return mTokens; }
-    function apiRequests() { return mRequests; }
-    function cachedTokens() { return mCached; }
+    function model() as Lang.String { return mModel; }
+    function credits() as Lang.Float or Null { return mCredits; }
+    function tokens() as Lang.Numeric or Null { return mTokens; }
+    function apiRequests() as Lang.Numeric or Null { return mRequests; }
+    function cachedTokens() as Lang.Numeric or Null { return mCached; }
 
     //! Crédito de este modelo como fracción del TOTAL de la ventana
     //! (totals.credits, p.ej. 3884.6), NUNCA del allowance del periodo de
     //! facturación (7000): así las filas no pueden parecer que suman el héroe.
     //! Tolerante a null (modelo sin cifra en la caché/API): 0.0.
     function windowFraction(windowTotal as Lang.Float or Null) as Lang.Float {
-        if (windowTotal == null || windowTotal <= 0.0 || mCredits == null) {
+        var total = windowTotal;
+        var credits = mCredits;
+        if (total == null || total <= 0.0 || credits == null) {
             return 0.0;
         }
-        var f = mCredits * 1.0 / windowTotal;
+        var f = credits * 1.0 / total;
         if (f < 0.0) { f = 0.0; }
         if (f > 1.0) { f = 1.0; }
         return f;
@@ -57,11 +62,12 @@ class ModelCredit {
     //! QuotaStore.assignLabels() sobre la lista COMPLETA (desambiguación de
     //! prefijos repetidos) y viaja con el objeto. Fallback defensivo: el
     //! nombre crudo del modelo si por algún motivo no tuviera etiqueta.
-    function label() {
-        if (mLabel == null || mLabel.equals("")) {
+    function label() as Lang.String {
+        var l = mLabel;
+        if (l == null || l.equals("")) {
             return mModel;
         }
-        return mLabel;
+        return l;
     }
 
     function setLabel(l as Lang.String) as Void {
@@ -76,22 +82,26 @@ class ModelCredit {
 //! used/allowance; el desglose por modelo vive en la ventana.
 class CreditState {
 
-    var mAllowance;    //!< Float: créditos del periodo (p.ej. 7000.0)
-    var mUsed;         //!< Float: créditos usados del periodo (p.ej. 3884.6)
-    var mRemaining;    //!< Float or null
-    var mFrozen;       //!< Boolean: cuenta congelada -> aviso en vez del badge
-    var mPeriodDay;    //!< Number: día civil (días desde epoch) de period_end
-    var mWindowTotal;  //!< Float or null: totals.credits (ventana de 30 días)
-    var mModels;       //!< Array<ModelCredit> filtrado (créditos > 0),
-                       //!< pre-ordenado por créditos desc y CON etiquetas
-    var mPeriodStart;  //!< Number or null: epoch (s) del inicio del periodo
-                       //!< (period_start a las 00:00 UTC); null en cachés viejas
-    var mTotTokens;    //!< Number/Long or null: total_tokens de la ventana
-    var mTotRequests;  //!< Number/Long or null: api_requests de la ventana
-    var mTotCached;    //!< Number/Long or null: cached_tokens de la ventana
+    var mAllowance as Lang.Float;   //!< créditos del periodo (p.ej. 7000.0)
+    var mUsed as Lang.Float;        //!< créditos usados del periodo (3884.6)
+    var mRemaining as Lang.Float or Null; //!< créditos restantes del periodo
+    var mFrozen as Lang.Boolean;    //!< cuenta congelada -> aviso en vez del badge
+    var mPeriodDay as Lang.Number or Null; //!< día civil de period_end
+    var mWindowTotal as Lang.Float or Null; //!< totals.credits (ventana 30 d)
+    var mModels as Lang.Array;      //!< Array<ModelCredit> filtrado (créditos
+                                    //!< > 0), pre-ordenado desc y CON etiquetas
+    var mPeriodStart as Lang.Number or Null; //!< epoch (s) del inicio del
+                                    //!< periodo; null en cachés viejas
+    var mTotTokens as Lang.Numeric or Null;   //!< total_tokens de la ventana
+    var mTotRequests as Lang.Numeric or Null; //!< api_requests de la ventana
+    var mTotCached as Lang.Numeric or Null;   //!< cached_tokens de la ventana
 
-    function initialize(allowance, used, remaining, frozen, periodDay,
-            windowTotal, models, periodStart, totTokens, totRequests, totCached) {
+    function initialize(allowance as Lang.Float, used as Lang.Float,
+            remaining as Lang.Float or Null, frozen as Lang.Boolean,
+            periodDay as Lang.Number or Null, windowTotal as Lang.Float or Null,
+            models as Lang.Array, periodStart as Lang.Number or Null,
+            totTokens as Lang.Numeric or Null, totRequests as Lang.Numeric or Null,
+            totCached as Lang.Numeric or Null) {
         mAllowance = allowance;
         mUsed = used;
         mRemaining = remaining;
@@ -107,26 +117,28 @@ class CreditState {
 
     //! Fracción del allowance ya consumida (héroe, arco y semáforo), 0..1.
     function usedFraction() as Lang.Float {
-        if (mAllowance == null || mAllowance <= 0.0 || mUsed == null) {
+        var allowance = mAllowance;
+        var used = mUsed;
+        if (allowance == null || allowance <= 0.0 || used == null) {
             return 0.0;
         }
-        var f = mUsed * 1.0 / mAllowance;
+        var f = used * 1.0 / allowance;
         if (f < 0.0) { f = 0.0; }
         if (f > 1.0) { f = 1.0; }
         return f;
     }
 
-    function allowance() { return mAllowance; }
-    function used() { return mUsed; }
-    function remaining() { return mRemaining; }
-    function frozen() { return mFrozen; }
-    function periodDay() { return mPeriodDay; }
-    function windowTotal() { return mWindowTotal; }
-    function models() { return mModels; }
-    function periodStart() { return mPeriodStart; }
-    function totTokens() { return mTotTokens; }
-    function totRequests() { return mTotRequests; }
-    function totCached() { return mTotCached; }
+    function allowance() as Lang.Float { return mAllowance; }
+    function used() as Lang.Float { return mUsed; }
+    function remaining() as Lang.Float or Null { return mRemaining; }
+    function frozen() as Lang.Boolean { return mFrozen; }
+    function periodDay() as Lang.Number or Null { return mPeriodDay; }
+    function windowTotal() as Lang.Float or Null { return mWindowTotal; }
+    function models() as Lang.Array { return mModels; }
+    function periodStart() as Lang.Number or Null { return mPeriodStart; }
+    function totTokens() as Lang.Numeric or Null { return mTotTokens; }
+    function totRequests() as Lang.Numeric or Null { return mTotRequests; }
+    function totCached() as Lang.Numeric or Null { return mTotCached; }
 }
 
 
@@ -143,35 +155,53 @@ class CreditState {
 class QuotaStore {
 
     // Instantánea de créditos serializada (ver serializeState()).
-    public static var CREDITS_KEY = "nan_credits";
+    public static var CREDITS_KEY as Lang.String = "nan_credits";
     // B1: epoch de PARED en segundos UNIX (Time.now().value()), NO
     // System.getTimer() (ms desde boot: tras un reboot la edad mentía).
     // Se mantiene el literal "nan_fetch_epoch": la glance lo lee de Storage.
-    public static var FETCH_KEY = "nan_fetch_epoch";
+    public static var FETCH_KEY as Lang.String = "nan_fetch_epoch";
     // B2: epoch de pared del último INTENTO (éxito o fallo). El anti-rebote /
     // backoff de onShow() usa esta marca, no sólo la del éxito.
-    public static var ATTEMPT_KEY = "nan_attempt_epoch";
+    public static var ATTEMPT_KEY as Lang.String = "nan_attempt_epoch";
     // B3: texto del error del último intento (se borra cuando hay un éxito).
-    public static var LAST_ERR_KEY = "nan_last_err";
+    public static var LAST_ERR_KEY as Lang.String = "nan_last_err";
     // B4: true si el último intento acabó en 401 (key revocada o mal
     // tecleada); SELECT abre el editor para corregirla y un éxito lo borra.
     public static var AUTH_ERR_KEY as Lang.String = "nan_auth_err";
+    // Serie diaria de 8 días (getSeries), histórico de tokens y unidad de
+    // las pantallas 2-4 (START alterna créditos/tokens; se recuerda).
+    public static var SERIES_KEY as Lang.String = "nan_series";
+    public static var ALLTIME_KEY as Lang.String = "nan_alltime_tok";
+    public static var UNIT_KEY as Lang.String = "nan_unit_tok";
 
-    private static var sCallback = null;
+    private static var sCallback
+        as (Method(state as CreditState or Null,
+            err as Lang.String or Null) as Void) or Null = null;
+    // Cachés en memoria (evitan leer Storage en cada repintado) y guard de
+    // la petición de serie en vuelo.
+    private static var sSeries as Lang.Dictionary<Lang.String, Lang.Object or Null> or Null = null;
+    private static var sTok as Lang.Boolean or Null = null;
+    private static var sSeriesAsked as Lang.Number = 0;
+    private static const SERIES_BUSY_S = 20;
 
     //! Conversión JSON -> Float a prueba de tipos. El parser JSON de CIQ
     //! devuelve Long/Number para enteros ("allowance": 7000) y Double/Float
     //! para decimales ("used": 3884.6); además Number es un INT de 32 bits,
     //! así que los enteros grandes llegan como Long de 64. instanceof no
-    //! lanza (el cast "as" sí: UnexpectedType), y "* 1.0" fuerza la
-    //! aritmética flotante con el mismo idioma que usa el resto del código.
-    public static function asFloat(v) as Lang.Float or Null {
-        if (v == null) {
-            return null;
+    //! lanza (el cast "as" sí: UnexpectedType); toFloat() convierte cada uno
+    //! sin aritmética con tipos mezclados.
+    public static function asFloat(v as Lang.Object or Null) as Lang.Float or Null {
+        if (v instanceof Lang.Float) {
+            return v;
         }
-        if (v instanceof Lang.Float || v instanceof Lang.Double
-                || v instanceof Lang.Number || v instanceof Lang.Long) {
-            return v * 1.0;
+        if (v instanceof Lang.Double) {
+            return (v as Lang.Double).toFloat();
+        }
+        if (v instanceof Lang.Number) {
+            return (v as Lang.Number).toFloat();
+        }
+        if (v instanceof Lang.Long) {
+            return (v as Lang.Long).toFloat();
         }
         return null;
     }
@@ -179,7 +209,7 @@ class QuotaStore {
     //! Formato compacto de créditos compartido por la vista y sus filas:
     //! < 1000 -> entero ("320"); >= 1000 -> una decimal y "K" ("3.9K",
     //! "7.0K"). 3884.6 -> "3.9K", 7000 -> "7.0K", 319.5 -> "320".
-    public static function creditLabel(v as Lang.Float) as Lang.String {
+    public static function creditLabel(v as Lang.Float or Null) as Lang.String {
         if (v == null) {
             return "?";
         }
@@ -197,11 +227,11 @@ class QuotaStore {
     //! después una decimal con K/M/B y SIN ".0" (156.0M -> "156M",
     //! 2.1M -> "2.1M"). 156000000 -> "156M", 1234567 -> "1.2M". Null o no
     //! numérico -> "—" (manejo de dato ausente).
-    public static function tokenLabel(v) as Lang.String {
-        if (!QuotaStore.isNumeric(v)) {
+    public static function tokenLabel(v as Lang.Object or Null) as Lang.String {
+        var f = QuotaStore.asFloat(v);
+        if (f == null) {
             return "—";
         }
-        var f = v * 1.0;
         if (f < 0.0) {
             f = 0.0;
         }
@@ -226,9 +256,20 @@ class QuotaStore {
         return (tenths / 10) + "." + (tenths % 10) + suffix;
     }
 
+    //! Valor numérico del parser JSON/Storage TAL CUAL (Number int32, Long
+    //! int64, Float o Double) si lo es, o null. Conserva el tipo original:
+    //! los conteos de tokens pueden venir como Long y no deben pasar a
+    //! Number (32 bits) ni a Float (32 bits) por el camino.
+    public static function asNumeric(v as Lang.Object or Null) as Lang.Numeric or Null {
+        if (QuotaStore.isNumeric(v)) {
+            return v as Lang.Numeric;
+        }
+        return null;
+    }
+
     //! true si `v` es un valor numérico del parser JSON/Storage (Number int32,
     //! Long int64, Float o Double); false en null, String, Boolean, etc.
-    public static function isNumeric(v) as Lang.Boolean {
+    public static function isNumeric(v as Lang.Object or Null) as Lang.Boolean {
         if (v == null) {
             return false;
         }
@@ -240,9 +281,6 @@ class QuotaStore {
     //! SDK 9.3.0 del fr955 (los nombres de modelo son ASCII, basta una tabla
     //! con find()). ÚNICA copia: las vistas usan las etiquetas de assignLabels.
     public static function upperAscii(s as Lang.String) as Lang.String {
-        if (s == null) {
-            return s;
-        }
         var lower = "abcdefghijklmnopqrstuvwxyz";
         var upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
         var out = "";
@@ -288,7 +326,7 @@ class QuotaStore {
             }
         }
         var u = QuotaStore.upperAscii(f);
-        return (u.length() > 5) ? u.substring(0, 4) : u;
+        return (u.length() > 5) ? (u.substring(0, 4) as Lang.String) : u;
     }
 
     //! Abreviatura de una palabra de VARIANTE (flash -> F, pro -> PRO...).
@@ -307,25 +345,22 @@ class QuotaStore {
             }
         }
         var u = QuotaStore.upperAscii(v);
-        return (u.length() > 3) ? u.substring(0, 3) : u;
+        return (u.length() > 3) ? (u.substring(0, 3) as Lang.String) : u;
     }
 
     //! Etiqueta COMPACTA de un id de modelo, sin puntos suspensivos en lo
     //! posible: familia abreviada + versión + variantes abreviadas, todo
     //! pegado. Ejemplos: "deepseek4.1flash" / "deepseek-v4.1-flash" ->
     //! "DS4.1F"; "deepseek4.1pro" -> "DS4.1PRO"; "glm5.3-flash" ->
-    //! "GLM5.3F"; "hunyuan-4" -> "HY4"; "kimi-k3" -> "KIMI-K3"; "minimax-m2"
-    //! -> "MM-M2"; "qwen3-235b-a22b-instruct-2507" -> "QW3I".
+    //! "GLM5.3F"; "hunyuan-4" -> "HY4"; "kimi-k3.1-pro" -> "K3.1PRO";
+    //! "minimax-m2" -> "M2"; "qwen3-235b-a22b-instruct-2507" -> "QW3I".
     //! Reglas: se ignora el prefijo de proveedor ("org/"); la "v" pegada a
     //! la versión cae (v4 -> 4); los tamaños ("235b", "a22b") y las fechas
     //! (números de >= 4 cifras sin punto) se descartan; una letra pegada a
     //! un número que no sea "v" (k3, m2, r1) forma parte de la versión y va
     //! tras guion si la etiqueta acaba en letra.
     public static function shortLabel(model as Lang.String) as Lang.String {
-        if (model == null) {
-            return "";
-        }
-        var s = QuotaStore.lowerAscii(model) as Lang.String;
+        var s = QuotaStore.lowerAscii(model);
         var slash = s.find("/");
         while (slash != null && slash >= 0 && slash + 1 < s.length()) {
             s = s.substring(slash + 1, s.length()) as Lang.String;
@@ -333,7 +368,7 @@ class QuotaStore {
         }
         // Tramos: [tipo, texto, pegado-al-anterior] con tipo 0 = letras,
         // 1 = número (dígitos y puntos); cualquier otro carácter separa.
-        var runs = [];
+        var runs = [] as Lang.Array<Lang.Array<Lang.Object>>;
         var cur = "";
         var curType = -1;
         var attached = false;
@@ -353,7 +388,7 @@ class QuotaStore {
             }
             if (t != curType || t == -1) {
                 if (curType >= 0 && cur.length() > 0) {
-                    runs.add([curType, cur, attached]);
+                    runs.add([curType, cur, attached] as Lang.Array<Lang.Object>);
                 }
                 attached = (t >= 0 && curType >= 0 && !sep);
                 sep = (t == -1);
@@ -369,9 +404,11 @@ class QuotaStore {
         }
 
         var out = "";
+        var fam = "";
         var start = 0;
         if (runs[0][0] == 0) {
-            out = QuotaStore.familyAbbr(runs[0][1]);
+            fam = QuotaStore.familyAbbr(runs[0][1] as Lang.String);
+            out = fam;
             start = 1;
         }
         var prefix = "";
@@ -384,7 +421,7 @@ class QuotaStore {
                 // Letra suelta pegada a un número que la sigue: prefijo de
                 // versión (v cae; k/m/r... se conservan).
                 if (txt.length() == 1 && nxt != null && nxt[0] == 1
-                        && nxt[2] == true) {
+                        && (nxt[2] as Lang.Boolean) == true) {
                     prefix = txt.equals("v") ? "" : QuotaStore.upperAscii(txt);
                     k++;
                     continue;
@@ -395,7 +432,7 @@ class QuotaStore {
             }
             // Número: tamaño ("235b"/"a22b") o fecha (>= 4 cifras sin punto)
             // -> se descarta junto con su prefijo.
-            var isSize = (nxt != null && nxt[0] == 0 && nxt[2] == true
+            var isSize = (nxt != null && nxt[0] == 0 && (nxt[2] as Lang.Boolean) == true
                 && (nxt[1].equals("b") || nxt[1].equals("m")
                     || nxt[1].equals("k")));
             if (isSize) {
@@ -409,6 +446,12 @@ class QuotaStore {
                 continue;
             }
             var piece = prefix + txt;
+            // La versión ya nombra a la familia por su inicial ("kimi-k3.1"
+            // -> "K3.1", "minimax-m2" -> "M2"): sobra la familia.
+            if (prefix.length() > 0 && start == 1 && fam.equals(out as Lang.String)
+                    && prefix.equals(fam.substring(0, 1))) {
+                out = "";
+            }
             if (prefix.length() > 0 && QuotaStore.endsWithLetter(out)) {
                 out += "-";
             }
@@ -440,10 +483,11 @@ class QuotaStore {
         if (n == 0) {
             return;
         }
-        var labels = [];
+        var labels = [] as Lang.Array<Lang.String>;
         for (var i = 0; i < n; i++) {
-            var m = models[i] as ModelCredit;
-            labels.add((m == null) ? "" : QuotaStore.shortLabel(m.model()));
+            var mV = models[i];
+            labels.add((mV instanceof ModelCredit)
+                ? QuotaStore.shortLabel((mV as ModelCredit).model()) : "");
         }
         for (var i = 0; i < n; i++) {
             if (labels[i].equals("")) {
@@ -471,9 +515,9 @@ class QuotaStore {
             }
         }
         for (var i = 0; i < n; i++) {
-            var m = models[i] as ModelCredit;
-            if (m != null) {
-                m.setLabel(labels[i]);
+            var mV = models[i];
+            if (mV instanceof ModelCredit) {
+                (mV as ModelCredit).setLabel(labels[i]);
             }
         }
     }
@@ -485,10 +529,11 @@ class QuotaStore {
     public static function filterBilled(models as Lang.Array) as Lang.Array {
         var out = [];
         for (var i = 0; i < models.size(); i++) {
-            var m = models[i] as ModelCredit;
-            if (m == null) {
+            var mV = models[i];
+            if (!(mV instanceof ModelCredit)) {
                 continue;
             }
+            var m = mV as ModelCredit;
             var c = m.credits();
             if (c == null || c <= 0.0) {
                 continue;
@@ -504,7 +549,7 @@ class QuotaStore {
         if (!(raw instanceof Lang.Dictionary)) {
             return null;
         }
-        var d = raw as Lang.Dictionary;
+        var d = raw as Lang.Dictionary<Lang.String, Lang.Object or Null>;
         var allowance = QuotaStore.asFloat(d.get("a"));
         var used = QuotaStore.asFloat(d.get("u"));
         if (allowance == null || used == null) {
@@ -518,18 +563,20 @@ class QuotaStore {
                 if (!(eV instanceof Lang.Dictionary)) {
                     continue;
                 }
-                var e = eV as Lang.Dictionary;
-                var name = e.get("n") as Lang.String;
+                var e = eV as Lang.Dictionary<Lang.String, Lang.Object or Null>;
+                var nameV = e.get("n");
                 var credits = QuotaStore.asFloat(e.get("c"));
                 // Compatibilidad de arranque: una caché ANTERIOR (o una
                 // entrada sin "tk"/"rq"/"ca") no debe romper nada: los campos
                 // extra llegan null y el desglose pinta "—" en lo que falte.
                 // El nombre es lo único imprescindible para listar el modelo.
-                if (name == null) {
+                if (!(nameV instanceof Lang.String)) {
                     continue;
                 }
-                models.add(new ModelCredit(name, credits,
-                    e.get("tk"), e.get("rq"), e.get("ca")));
+                models.add(new ModelCredit(nameV as Lang.String, credits,
+                    QuotaStore.asNumeric(e.get("tk")),
+                    QuotaStore.asNumeric(e.get("rq")),
+                    QuotaStore.asNumeric(e.get("ca"))));
             }
         }
         var frozenV = d.get("f");
@@ -540,39 +587,41 @@ class QuotaStore {
 
         // period_start en epoch (s); las cachés viejas no lo traen -> null y
         // la pantalla de PROYECCIÓN estima el ritmo con 30 días (~).
-        var periodStart = null;
-        if (QuotaStore.isNumeric(d.get("ps"))) {
-            periodStart = d.get("ps");
-        }
+        var psV = d.get("ps");
+        var periodStart = (psV instanceof Lang.Number) ? (psV as Lang.Number) : null;
 
         // Totales de la ventana (tokens/peticiones/caché): claves "tt"/"ar"/
         // "ct". CACHÉS VIEJAS sin ellas: se suman las entradas tk/rq/ca de
         // TODOS los modelos ANTES de filtrar los gratuitos (cuentan igual).
-        var totTokens = QuotaStore.isNumeric(d.get("tt")) ? d.get("tt") : null;
-        var totRequests = QuotaStore.isNumeric(d.get("ar")) ? d.get("ar") : null;
-        var totCached = QuotaStore.isNumeric(d.get("ct")) ? d.get("ct") : null;
+        var totTokens = QuotaStore.asNumeric(d.get("tt"));
+        var totRequests = QuotaStore.asNumeric(d.get("ar"));
+        var totCached = QuotaStore.asNumeric(d.get("ct"));
         if (totTokens == null || totRequests == null || totCached == null) {
-            var sT = 0;
-            var sR = 0;
-            var sC = 0;
+            var sT = 0 as Lang.Numeric;
+            var sR = 0 as Lang.Numeric;
+            var sC = 0 as Lang.Numeric;
             var anyT = false;
             var anyR = false;
             var anyC = false;
             for (var i = 0; i < models.size(); i++) {
-                var sm = models[i] as ModelCredit;
-                if (sm == null) {
+                var smV = models[i];
+                if (!(smV instanceof ModelCredit)) {
                     continue;
                 }
-                if (sm.tokens() != null) {
-                    sT += sm.tokens();
+                var sm = smV as ModelCredit;
+                var tv = sm.tokens();
+                var rv = sm.apiRequests();
+                var cv = sm.cachedTokens();
+                if (tv != null) {
+                    sT += tv;
                     anyT = true;
                 }
-                if (sm.apiRequests() != null) {
-                    sR += sm.apiRequests();
+                if (rv != null) {
+                    sR += rv;
                     anyR = true;
                 }
-                if (sm.cachedTokens() != null) {
-                    sC += sm.cachedTokens();
+                if (cv != null) {
+                    sC += cv;
                     anyC = true;
                 }
             }
@@ -592,8 +641,10 @@ class QuotaStore {
         models = QuotaStore.filterBilled(models);
         QuotaStore.assignLabels(models);
 
+        var dV = d.get("d");
+        var periodDay = (dV instanceof Lang.Number) ? (dV as Lang.Number) : null;
         return new CreditState(allowance, used, QuotaStore.asFloat(d.get("r")),
-            frozen, d.get("d"), QuotaStore.asFloat(d.get("t")), models,
+            frozen, periodDay, QuotaStore.asFloat(d.get("t")), models,
             periodStart, totTokens, totRequests, totCached);
     }
 
@@ -607,26 +658,27 @@ class QuotaStore {
     //! traído nada.
     public static function getLastFetchEpoch() as Lang.Number {
         var v = Application.Storage.getValue(QuotaStore.FETCH_KEY);
-        if (v == null) {
+        if (!(v instanceof Lang.Number)) {
             return 0;
         }
-        return v;
+        return v as Lang.Number;
     }
 
     //! Epoch de pared (s) del último INTENTO (éxito o fallo), 0 si nunca.
     //! Es la marca que usa el anti-rebote/backoff de onShow() (B2).
     public static function getLastAttemptEpoch() as Lang.Number {
         var v = Application.Storage.getValue(QuotaStore.ATTEMPT_KEY);
-        if (v == null) {
+        if (!(v instanceof Lang.Number)) {
             return 0;
         }
-        return v;
+        return v as Lang.Number;
     }
 
     //! Texto del error del último intento, o null si el último intento fue
     //! éxito (B3: el aviso ámbar sobrevive a reabrir la vista).
-    public static function getLastErr() {
-        return Application.Storage.getValue(QuotaStore.LAST_ERR_KEY);
+    public static function getLastErr() as Lang.String or Null {
+        var v = Application.Storage.getValue(QuotaStore.LAST_ERR_KEY);
+        return (v instanceof Lang.String) ? (v as Lang.String) : null;
     }
 
     //! true si hay una API key utilizable en Properties: no nula y con el
@@ -666,7 +718,8 @@ class QuotaStore {
 
     //! Fires a request to the NaN Cloud API. The callback receives
     //! (state as CreditState or Null, error as String or Null).
-    public static function refresh(callback as Method(state as CreditState or Null, err as Lang.String or Null)) {
+    public static function refresh(callback as Method(state as CreditState or Null,
+            err as Lang.String or Null) as Void) as Void {
         QuotaStore.sCallback = callback;
 
         // B2: TODO intento (incluso el que acaba en "Falta la API key") se
@@ -711,11 +764,11 @@ class QuotaStore {
             QuotaStore.fail(msg);
             return;
         }
-        QuotaStore.parseSnapshot(data as Lang.Dictionary);
+        QuotaStore.parseSnapshot(data as Lang.Dictionary<Lang.String, Lang.Object or Null>);
     }
 
     //! Parses the /v1/usage payload and refreshes the cache.
-    public static function parseSnapshot(data as Lang.Dictionary) {
+    public static function parseSnapshot(data as Lang.Dictionary<Lang.String, Lang.Object or Null>) as Void {
         var state = QuotaStore.stateFromJson(data);
         if (state == null) {
             // HTTP 200 con una forma inesperada (la API cambió): fallo blando,
@@ -723,7 +776,8 @@ class QuotaStore {
             QuotaStore.fail("Respuesta inesperada");
             return;
         }
-        Application.Storage.setValue(QuotaStore.CREDITS_KEY, QuotaStore.serializeState(state));
+        Application.Storage.setValue(QuotaStore.CREDITS_KEY,
+            QuotaStore.serializeState(state) as Lang.Dictionary<Application.Storage.KeyType, Application.Storage.ValueType>);
         // B1: epoch de PARED en segundos (sobrevive a reboots), no System.getTimer().
         Application.Storage.setValue(QuotaStore.FETCH_KEY, QuotaStore.nowEpoch());
         // B3: éxito -> el aviso de error persistido desaparece.
@@ -731,24 +785,168 @@ class QuotaStore {
         // B4: y la marca de 401: la key vuelve a ser válida.
         Application.Storage.deleteValue(QuotaStore.AUTH_ERR_KEY as Lang.String);
 
+        // Histórico de tokens (all_time) para la pantalla ACTIVIDAD.
+        var atV = data.get("all_time");
+        if (atV instanceof Lang.Dictionary
+                && QuotaStore.isNumeric((atV as Lang.Dictionary<Lang.String, Lang.Object or Null>).get("total_tokens"))) {
+            Application.Storage.setValue(QuotaStore.ALLTIME_KEY,
+                QuotaStore.num(atV as Lang.Dictionary<Lang.String, Lang.Object or Null>, "total_tokens"));
+        }
+
         if (QuotaStore.sCallback != null) {
             QuotaStore.sCallback.invoke(state, null);
         }
     }
 
+    // -------------------------------------------------------------------------
+    // SERIE DIARIA (proyecciones 24 h / 7 d y ACTIVIDAD)
+    // -------------------------------------------------------------------------
+    // La API sólo agrega por DÍA UTC (data[] = una fila por día y modelo; no
+    // hay ventana móvil de horas). Se piden 8 días (hoy-7 .. hoy) y se suman
+    // por día: índice 7 = hoy (parcial), 6 = ayer... 0 = hace 7 días. Con
+    // eso, "24 h" = hoy + ayer x (1 - fracción del día UTC transcurrida) y
+    // "7 d" = hoy + 6 días completos + el día 0 prorrateado igual.
+
+    //! Pide la serie SÓLO si hace falta: bajo demanda (al entrar en las
+    //! pantallas 3-5), si no existe o tiene más de `maxAge` s, y nunca con
+    //! otra petición de serie en vuelo (< SERIES_BUSY_S). Ventana de 8 días
+    //! con limit=500 (8 días x ~60 modelos en una página).
+    public static function ensureSeries(maxAge as Lang.Number) as Void {
+        var now = QuotaStore.nowEpoch();
+        var s = QuotaStore.getSeries();
+        if (s != null) {
+            var t = s.get("t");
+            if (t instanceof Lang.Number && now - t >= 0 && now - t < maxAge) {
+                return;
+            }
+        }
+        if (now - QuotaStore.sSeriesAsked < SERIES_BUSY_S || !QuotaStore.hasApiKey()) {
+            return;
+        }
+        QuotaStore.sSeriesAsked = now;
+        var key = Properties.getValue("api_key") as Lang.String;
+        var today = QuotaStore.nowEpoch() / 86400;
+        var url = "https://api.nan.builders/v1/usage?limit=500&start_date="
+            + QuotaStore.isoDate(today - 7) + "&end_date=" + QuotaStore.isoDate(today);
+        var options = {
+            :method => Communications.HTTP_REQUEST_METHOD_GET,
+            :headers => { "Authorization" => "Bearer " + key },
+            :responseType => Communications.HTTP_RESPONSE_CONTENT_TYPE_JSON
+        };
+        var receptor = new QuotaStore();
+        Communications.makeWebRequest(url, null, options,
+            receptor.method(:onSeriesResponse));
+    }
+
+    //! Respuesta de la serie: fallo silencioso (se conserva la anterior).
+    function onSeriesResponse(responseCode as Lang.Number, data as Null or Lang.ByteArray or Lang.Dictionary or Lang.String or Toybox.PersistedContent.Iterator) as Void {
+        QuotaStore.sSeriesAsked = 0;
+        if (responseCode != 200 || !(data instanceof Lang.Dictionary)) {
+            return;
+        }
+        var rows = (data as Lang.Dictionary<Lang.String, Lang.Object or Null>).get("data");
+        if (!(rows instanceof Lang.Array)) {
+            return;
+        }
+        var today = QuotaStore.nowEpoch() / 86400;
+        var first = today - 7;
+        var cr = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        var tk = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        var rq = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        var ca = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        var pt = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        for (var i = 0; i < rows.size(); i++) {
+            var rV = rows[i];
+            if (!(rV instanceof Lang.Dictionary)) {
+                continue;
+            }
+            var r = rV as Lang.Dictionary<Lang.String, Lang.Object or Null>;
+            var day = QuotaStore.parseIsoDay(r.get("date") as Lang.String);
+            if (day == null || day < first || day > today) {
+                continue;
+            }
+            var k = (day as Lang.Number) - first;
+            cr[k] += QuotaStore.num(r, "credits");
+            tk[k] += QuotaStore.num(r, "total_tokens");
+            rq[k] += QuotaStore.num(r, "api_requests");
+            ca[k] += QuotaStore.num(r, "cached_tokens");
+            pt[k] += QuotaStore.num(r, "prompt_tokens");
+        }
+        var series = {
+            "d" => today, "t" => QuotaStore.nowEpoch(), "cr" => cr, "tk" => tk,
+            "rq" => rq, "ca" => ca, "pt" => pt
+        };
+        QuotaStore.sSeries = series as Lang.Dictionary<Lang.String, Lang.Object or Null>;
+        Application.Storage.setValue(QuotaStore.SERIES_KEY,
+            series as Lang.Dictionary<Application.Storage.KeyType, Application.Storage.ValueType>);
+        WatchUi.requestUpdate();
+    }
+
+    //! Valor numérico d[key] del JSON -> Float, 0.0 si falta.
+    private static function num(d as Lang.Dictionary<Lang.String, Lang.Object or Null>, key as Lang.String) as Lang.Float {
+        var f = QuotaStore.asFloat(d.get(key));
+        return (f == null) ? 0.0 : f;
+    }
+
+    //! Serie cacheada {"d": día UTC al pedirla, "t": epoch de llegada,
+    //! "cr"/"tk"/"rq"/"ca"/"pt": 8 Floats, [7] = ese día} o null si nunca
+    //! llegó. Se lee de Storage UNA vez por proceso; después, de memoria.
+    public static function getSeries() as Lang.Dictionary<Lang.String, Lang.Object or Null> or Null {
+        if (QuotaStore.sSeries == null) {
+            var s = Application.Storage.getValue(QuotaStore.SERIES_KEY);
+            if (s instanceof Lang.Dictionary) {
+                QuotaStore.sSeries = s as Lang.Dictionary<Lang.String, Lang.Object or Null>;
+            }
+        }
+        return QuotaStore.sSeries;
+    }
+
+    //! all_time.total_tokens de la última respuesta, o null.
+    public static function getAllTimeTokens() as Lang.Float or Null {
+        return QuotaStore.asFloat(Application.Storage.getValue(QuotaStore.ALLTIME_KEY));
+    }
+
+    //! Unidad de las pantallas 2-4 (START alterna): true = tokens. Storage
+    //! se lee una vez por proceso; el resto, de memoria.
+    public static function showTokens() as Lang.Boolean {
+        if (QuotaStore.sTok == null) {
+            var v = Application.Storage.getValue(QuotaStore.UNIT_KEY);
+            QuotaStore.sTok = (v instanceof Lang.Boolean) && (v as Lang.Boolean);
+        }
+        return QuotaStore.sTok == true;
+    }
+
+    public static function toggleUnit() as Void {
+        QuotaStore.sTok = !QuotaStore.showTokens();
+        Application.Storage.setValue(QuotaStore.UNIT_KEY, QuotaStore.sTok);
+    }
+
+    //! Día (días desde epoch) -> "YYYY-MM-DD" (inverso de dayNumber).
+    public static function isoDate(z as Lang.Number) as Lang.String {
+        z += 719468;
+        var era = (z >= 0 ? z : z - 146096) / 146097;
+        var doe = z - era * 146097;
+        var yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+        var y = yoe + era * 400;
+        var doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        var mp = (5 * doy + 2) / 153;
+        var d = doy - (153 * mp + 2) / 5 + 1;
+        var m = (mp < 10) ? mp + 3 : mp - 9;
+        if (m <= 2) {
+            y += 1;
+        }
+        return y.format("%04d") + "-" + m.format("%02d") + "-" + d.format("%02d");
+    }
+
     //! Builds a CreditState from the /v1/usage JSON. Devuelve null si falta
     //! el bloque "credits" (allowance y used son imprescindibles) o si el
     //! payload no es un diccionario; los demás bloques degradan a null/[].
-    public static function stateFromJson(data as Lang.Dictionary) as CreditState or Null {
-        if (data == null) {
-            return null;
-        }
-
+    public static function stateFromJson(data as Lang.Dictionary<Lang.String, Lang.Object or Null>) as CreditState or Null {
         var crV = data.get("credits");
         if (!(crV instanceof Lang.Dictionary)) {
             return null;
         }
-        var cr = crV as Lang.Dictionary;
+        var cr = crV as Lang.Dictionary<Lang.String, Lang.Object or Null>;
 
         var allowance = QuotaStore.asFloat(cr.get("allowance"));
         var used = QuotaStore.asFloat(cr.get("used"));
@@ -766,18 +964,18 @@ class QuotaStore {
 
         // "2026-12-03T10:13:36Z" -> día civil para el badge de reset.
         var periodDay = null;
-        var pe = cr.get("period_end") as Lang.String;
-        if (pe != null) {
-            periodDay = QuotaStore.parseIsoDay(pe);
+        var peV = cr.get("period_end");
+        if (peV instanceof Lang.String) {
+            periodDay = QuotaStore.parseIsoDay(peV as Lang.String);
         }
 
         // period_start -> epoch (s) a las 00:00 UTC del día (precisión de
         // día, la que usa el cálculo del ritmo). Se guarda en la caché junto
         // a period_end para la pantalla de PROYECCIÓN.
         var periodStart = null;
-        var ps = cr.get("period_start") as Lang.String;
-        if (ps != null) {
-            var psDay = QuotaStore.parseIsoDay(ps);
+        var psV = cr.get("period_start");
+        if (psV instanceof Lang.String) {
+            var psDay = QuotaStore.parseIsoDay(psV as Lang.String);
             if (psDay != null) {
                 periodStart = psDay * 86400;
             }
@@ -790,17 +988,14 @@ class QuotaStore {
         var models = [];
         var toV = data.get("totals");
         if (toV instanceof Lang.Dictionary) {
-            var to = toV as Lang.Dictionary;
+            var to = toV as Lang.Dictionary<Lang.String, Lang.Object or Null>;
             windowTotal = QuotaStore.asFloat(to.get("credits"));
             // Conteos de la ventana si el bloque "totals" los trae; si no,
             // abajo se suman desde by_model (incluye los modelos gratuitos:
             // el saldo se calcula ANTES de filtrar los modelos sin créditos).
-            totTokens = QuotaStore.isNumeric(to.get("total_tokens"))
-                ? to.get("total_tokens") : null;
-            totRequests = QuotaStore.isNumeric(to.get("api_requests"))
-                ? to.get("api_requests") : null;
-            totCached = QuotaStore.isNumeric(to.get("cached_tokens"))
-                ? to.get("cached_tokens") : null;
+            totTokens = QuotaStore.asNumeric(to.get("total_tokens"));
+            totRequests = QuotaStore.asNumeric(to.get("api_requests"));
+            totCached = QuotaStore.asNumeric(to.get("cached_tokens"));
             var list = to.get("by_model");
             if (list instanceof Lang.Array) {
                 for (var i = 0; i < list.size(); i++) {
@@ -808,43 +1003,48 @@ class QuotaStore {
                     if (!(eV instanceof Lang.Dictionary)) {
                         continue;
                     }
-                    var e = eV as Lang.Dictionary;
-                    var name = e.get("model") as Lang.String;
+                    var e = eV as Lang.Dictionary<Lang.String, Lang.Object or Null>;
+                    var nameV = e.get("model");
                     var credits = QuotaStore.asFloat(e.get("credits"));
-                    if (name == null) {
+                    if (!(nameV instanceof Lang.String)) {
                         continue;
                     }
                     // total_tokens / api_requests / cached_tokens crudos
                     // (Number o Long de 64); se conservan tal cual y pueden
                     // ser null si la API los omite.
-                    models.add(new ModelCredit(name, credits,
-                        e.get("total_tokens"), e.get("api_requests"),
-                        e.get("cached_tokens")));
+                    models.add(new ModelCredit(nameV as Lang.String, credits,
+                        QuotaStore.asNumeric(e.get("total_tokens")),
+                        QuotaStore.asNumeric(e.get("api_requests")),
+                        QuotaStore.asNumeric(e.get("cached_tokens"))));
                 }
             }
         }
         if (totTokens == null || totRequests == null || totCached == null) {
-            var sT = 0;
-            var sR = 0;
-            var sC = 0;
+            var sT = 0 as Lang.Numeric;
+            var sR = 0 as Lang.Numeric;
+            var sC = 0 as Lang.Numeric;
             var anyT = false;
             var anyR = false;
             var anyC = false;
             for (var i = 0; i < models.size(); i++) {
-                var sm = models[i] as ModelCredit;
-                if (sm == null) {
+                var smV = models[i];
+                if (!(smV instanceof ModelCredit)) {
                     continue;
                 }
-                if (sm.tokens() != null) {
-                    sT += sm.tokens();
+                var sm = smV as ModelCredit;
+                var tv = sm.tokens();
+                var rv = sm.apiRequests();
+                var cv = sm.cachedTokens();
+                if (tv != null) {
+                    sT += tv;
                     anyT = true;
                 }
-                if (sm.apiRequests() != null) {
-                    sR += sm.apiRequests();
+                if (rv != null) {
+                    sR += rv;
                     anyR = true;
                 }
-                if (sm.cachedTokens() != null) {
-                    sC += sm.cachedTokens();
+                if (cv != null) {
+                    sC += cv;
                     anyC = true;
                 }
             }
@@ -878,11 +1078,13 @@ class QuotaStore {
         for (var i = 0; i < n; i++) {
             var best = i;
             for (var j = i + 1; j < n; j++) {
-                var a = models[best] as ModelCredit;
-                var b = models[j] as ModelCredit;
-                if (a == null || b == null) {
+                var aV = models[best];
+                var bV = models[j];
+                if (!(aV instanceof ModelCredit) || !(bV instanceof ModelCredit)) {
                     continue;
                 }
+                var a = aV as ModelCredit;
+                var b = bV as ModelCredit;
                 // Modelo sin créditos (null) = 0.0 para no romper la
                 // comparación numérica con valores Long/Float mixtos.
                 var ca = a.credits();
@@ -913,14 +1115,15 @@ class QuotaStore {
     //! "tk"=total_tokens, "rq"=api_requests, "ca"=cached_tokens. A nivel de
     //! instantánea: "ps"=period_start (epoch s), "tt"=tokens de la ventana,
     //! "ar"=peticiones y "ct"=tokens caché (opcionales, mismo criterio).
-    private static function serializeState(state as CreditState) {
+    private static function serializeState(state as CreditState) as Lang.Dictionary {
         var ms = [];
         var models = state.models();
         for (var i = 0; i < models.size(); i++) {
-            var m = models[i] as ModelCredit;
-            if (m == null) {
+            var mV = models[i];
+            if (!(mV instanceof ModelCredit)) {
                 continue;
             }
+            var m = mV as ModelCredit;
             var e = {
                 "n" => m.model(),
                 "c" => m.credits()
@@ -972,13 +1175,13 @@ class QuotaStore {
     }
 
     //! "2026-12-01T00:00:00Z" -> day number, using only the date part.
-    public static function parseIsoDay(iso as Lang.String) {
-        if (iso == null || iso.length() < 10) {
+    public static function parseIsoDay(iso as Lang.String) as Lang.Number or Null {
+        if (iso.length() < 10) {
             return null;
         }
-        var y = iso.substring(0, 4).toNumber();
-        var mo = iso.substring(5, 7).toNumber();
-        var d = iso.substring(8, 10).toNumber();
+        var y = (iso.substring(0, 4) as Lang.String).toNumber();
+        var mo = (iso.substring(5, 7) as Lang.String).toNumber();
+        var d = (iso.substring(8, 10) as Lang.String).toNumber();
         if (y == null || mo == null || d == null) {
             return null;
         }
@@ -986,17 +1189,18 @@ class QuotaStore {
     }
 
     //! Whole days between today (local clock) and the reset date, or null.
-    public static function daysUntilReset(periodDay) {
-        if (periodDay == null) {
+    public static function daysUntilReset(periodDay as Lang.Number or Null) as Lang.Number or Null {
+        var day = periodDay;
+        if (day == null) {
             return null;
         }
         // Time.today() -> local midnight Moment; value() -> UNIX seconds.
         var todaySeconds = Time.today().value();
         var today = todaySeconds / 86400;
-        return periodDay - today;
+        return day - today;
     }
 
-    private static function fail(msg as Lang.String) {
+    private static function fail(msg as Lang.String) as Void {
         // B2: el fallo TAMBIÉN es un intento -> backoff/anti-rebote de 30 s.
         // B3: se recuerda el texto para que el subtítulo ámbar sobreviva a
         // reabrir la vista (un éxito lo borra en parseSnapshot()).

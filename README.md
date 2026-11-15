@@ -2,14 +2,19 @@
 
 Widget Garmin que muestra el consumo de **créditos de tu cuenta de NaN Cloud** directamente en el reloj: cuánto llevas gastado del periodo, cuándo se resetea y qué modelos se lo están comiendo. Sin abrir el móvil.
 
-| Glance (fr955) | Vista principal (fr265) | Vista principal (fr965) |
-| --- | --- | --- |
-| ![Glance](img/glance-fr955.png) | ![fr265](img/main-fr265.png) | ![fr965](img/main-fr965.png) |
+| Glance (fr955) | Principal (fr265) | Proyección · 7 D (fr265) | Actividad · 7 D (fr265) |
+| --- | --- | --- | --- |
+| ![Glance](img/v1.3.0/fr955-0-glance.png) | ![Principal](img/v1.3.0/fr265-1-principal.png) | ![Proyección 7 D](img/v1.3.0/fr265-4-proyeccion-7d.png) | ![Actividad](img/v1.3.0/fr265-5-actividad.png) |
 
 - **% del periodo** con semáforo (verde/ámbar/rojo) y días hasta el reset (`RESET EN 14 D`)
-- **Top 3 de modelos** por consumo de los últimos 30 días, con barra
+- **Top 4 de modelos** por consumo de los últimos 30 días, con barra
+- **5 pantallas** (DOWN/UP para recorrerlas, BACK para salir):
+  1. Principal: % del periodo, reset y top de modelos (**START** refresca)
+  2. Desglose · 30 D: todos los modelos — **START** alterna **créditos** (blanco, `cr`) y **tokens** (azul, `tok`)
+  3. Proyección · 24 H y 4. Proyección · 7 D: ritmo, proyección a fin de periodo, veredicto, lo que queda y cuándo se agota a ese ritmo (START también alterna la unidad; en tokens, `~` = equivalencia con tu mezcla de modelos)
+  5. Actividad · 7 D: créditos por día en barras, peticiones, tokens por petición, % de caché e histórico de tokens
 - **Glance** siempre visible: créditos que quedan y edad del último dato
-- **Caché en el reloj**: sin conexión muestra la última instantánea; red solo al abrir (batería primero)
+- **Caché en el reloj**: sin conexión muestra la última instantánea; red solo al abrir (si el dato tiene más de 5 min) o con START, y el uso diario solo al entrar en las pantallas 3-5 (batería primero)
 
 ## Instalar (sin Connect IQ Store)
 
