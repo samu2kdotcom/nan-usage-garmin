@@ -2,9 +2,11 @@
 
 Widget Garmin que muestra el consumo de **créditos de tu cuenta de NaN Cloud** directamente en el reloj: cuánto llevas gastado del periodo, cuándo se resetea y qué modelos se lo están comiendo. Sin abrir el móvil.
 
-| Glance (fr955) | Principal (fr265) | Proyección · 7 D (fr265) | Actividad · 7 D (fr265) |
-| --- | --- | --- | --- |
-| ![Glance](img/v1.3.0/fr955-0-glance.png) | ![Principal](img/v1.3.0/fr265-1-principal.png) | ![Proyección 7 D](img/v1.3.0/fr265-4-proyeccion-7d.png) | ![Actividad](img/v1.3.0/fr265-5-actividad.png) |
+| Principal | Proyección · 7 D (tokens) | Actividad · 7 D |
+| --- | --- | --- |
+| ![Principal](img/v1.3.1/fenix7-1-principal.png) | ![Proyección · 7 D](img/v1.3.1/fenix7-2-proyeccion-7d-tokens.png) | ![Actividad · 7 D](img/v1.3.1/fenix7-3-actividad.png) |
+
+<sub>fēnix 7 en el simulador, con datos de ejemplo. Más capturas (glance, desglose en créditos y tokens, fr265 y fr955): [`img/v1.3.0`](img/v1.3.0).</sub>
 
 - **% del periodo** con semáforo (verde/ámbar/rojo) y días hasta el reset (`RESET EN 14 D`)
 - **Top 4 de modelos** por consumo de los últimos 30 días, con barra
